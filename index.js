@@ -22,10 +22,21 @@ import { fileURLToPath } from 'node:url'
 import { COMMANDER_CONTRACT, parseCodeState, parseDecision, parseGoalApprovals, parseRequestId } from './protocol.js'
 import { computeCodeState, describeGitHead } from './code-state.js'
 import { createStateStore, STATE_TABLES } from './state-store.js'
+import {
+  normalizeTakeover,
+  nextTakeover,
+  onUserReturn,
+  requiresConsultBeforeAsking,
+  requiresGoalApproval,
+  resolveTakeover,
+  TAKEOVER_LABELS,
+  TAKEOVER_SOURCES,
+  TAKEOVER_STATES,
+} from './takeover.js'
 import { createTranslator, localeKeyDiff } from './messages.js'
 
 /** 运行时版本标记：status 里显示，用来确认当前进程加载的是哪一版代码（HMR 是否生效）。 */
-const PLUGIN_VERSION = '2.9.11'
+const PLUGIN_VERSION = '2.9.12'
 
 /** 从 DSH 安装目录加载 schemastery；失败时插件仍可运行，只是 Plugin Manager 不显示 Config。 */
 function loadSchemaLib() {
@@ -774,6 +785,8 @@ export function apply(ctx, rawConfig = {}) {
   const approvedSessions = new Map()
   /** 当前用户回合内是否已经咨询过指挥员。 */
   const consultedSinceUser = new Map()
+  /** 每个 Lead 会话的用户显式接管状态覆盖（持久化在 state.json 的 takeover 表）。 */
+  const takeoverOverrides = new Map()
   /** 每个 Lead 会话由指挥员批准的 goal 变更动作（一次性）。 */
   const goalApprovals = new Map()
   /** 最近一次插件执行的 goal 操作，用于判断 pause/resume 来源是 agent 还是 user。 */
@@ -832,6 +845,40 @@ export function apply(ctx, rawConfig = {}) {
     }
   }
 
+  /** 指挥员 teammate 是否已经存在（同步，供门禁使用）。 */
+  function commanderExists(agent) {
+    try {
+      const members = teamService().listMembers(agent)
+      return (Array.isArray(members) ? members : []).some(
+        (member) => member.role === 'teammate' && member.name === config.commanderName,
+      )
+    } catch {
+      return commanderStarted.size > 0
+    }
+  }
+
+  /**
+   * 当前接管状态（同步读内存缓存，门禁可以直接用）。
+   *
+   * 状态默认推导（无指挥员=off、有 goal=partial、否则 observe），
+   * 用户显式 `/commander takeover <状态>` 后以覆盖值为准。
+   */
+  function currentTakeover(agent) {
+    const leadId = rootSessionIdOf(agent)
+    const goal = (() => {
+      try {
+        return ctx.get('goals')?.get?.(agent)
+      } catch {
+        return undefined
+      }
+    })()
+    return resolveTakeover({
+      hasCommander: commanderExists(agent),
+      goalActive: goal?.phase === 'active',
+      override: takeoverOverrides.get(leadId)?.state,
+    })
+  }
+
   // 放行门禁：写工具使当前放行失效；没有「允许结束」时不允许 complete goal。
   ctx.effect(() =>
     ctx.tools.guard((exec) => {
@@ -847,8 +894,10 @@ export function apply(ctx, rawConfig = {}) {
         approvedSessions.delete(leadId)
       }
       if (exec.name === 'ask_user_question' && !header?.parentSession) {
-        if (commanderStarted.has(leadId) && consultedSinceUser.get(leadId) !== true) {
-          return t('gate.needCommander')
+        // 只有「全接管」才强制先咨询：partial/observe/off 下问用户不该被拦。
+        const takeover = currentTakeover(agent)
+        if (requiresConsultBeforeAsking(takeover.state) && consultedSinceUser.get(leadId) !== true) {
+          return t('gate.needCommander', { state: TAKEOVER_LABELS[takeover.state] ?? takeover.state })
         }
       }
       if (config.enforceApproval !== true) return undefined
@@ -856,6 +905,8 @@ export function apply(ctx, rawConfig = {}) {
       const action = exec.arguments && typeof exec.arguments === 'object' ? exec.arguments.action : undefined
       if (header?.parentSession) return undefined
       if (!commanderStarted.has(leadId)) return undefined
+      // partial/full 才接管 goal 命令；observe/off 下不拦。
+      if (!requiresGoalApproval(currentTakeover(agent).state)) return undefined
       const allowed = goalApprovals.get(leadId)
       const phase = currentGoalPhase(agent)
       if (action === 'complete') {
@@ -1084,6 +1135,17 @@ export function apply(ctx, rawConfig = {}) {
     const kind = event.data?.source?.kind
     if (kind !== undefined && kind !== 'user') return
     consultedSinceUser.set(session.id, false)
+    // 你在打字就说明你在场：全接管自动降为部分接管，不必再挡你。
+    const current = takeoverOverrides.get(session.id)
+    if (current) {
+      const next = onUserReturn(current.state, current.source)
+      if (next.downgraded) {
+        takeoverOverrides.set(session.id, { state: next.state, source: next.source, at: Date.now() })
+        pendingUnit()
+          .then((unit) => unit.putRecord('takeover', session.id, takeoverOverrides.get(session.id)))
+          .catch(() => {})
+      }
+    }
   })
 
   // 记录 goal 生命周期变更来源：插件执行=agent，用户界面=user。
@@ -1463,6 +1525,42 @@ export function apply(ctx, rawConfig = {}) {
       mode = undefined
     }
     return { store, snapshot, counts: store.counts(), mode }
+  }
+
+  /** 启动时把持久化的接管覆盖读进内存（门禁是同步的，必须走缓存）。 */
+  async function hydrateTakeover() {
+    try {
+      const store = await stateStore()
+      for (const [leadId, record] of Object.entries(store.table('takeover') ?? {})) {
+        const state = normalizeTakeover(record?.state)
+        if (state) takeoverOverrides.set(leadId, { state, source: record.source ?? 'user', at: record.at })
+      }
+    } catch {
+      // 读不到就用推导值
+    }
+  }
+
+  /** 设置/清除某个 Lead 的接管覆盖（同时落盘）。 */
+  async function setTakeoverOverride(leadId, state) {
+    if (!leadId) return
+    if (state === undefined || state === null) {
+      takeoverOverrides.delete(leadId)
+      await pendingUnit().then((unit) => unit.deleteRecord('takeover', leadId)).catch(() => {})
+      return
+    }
+    const normalized = normalizeTakeover(state)
+    if (!normalized) return
+    const record = { state: normalized, source: 'user', at: Date.now() }
+    takeoverOverrides.set(leadId, record)
+    await pendingUnit().then((unit) => unit.putRecord('takeover', leadId, record)).catch(() => {})
+  }
+
+  /** 接管状态一行（status / doctor 共用）。 */
+  function takeoverLine(agent) {
+    const { state, source } = currentTakeover(agent)
+    const label = TAKEOVER_LABELS[state] ?? state
+    const why = TAKEOVER_SOURCES[source] ?? source
+    return `${label}（${state}，${why}）`
   }
 
   async function pendingUnit() {
@@ -2264,10 +2362,16 @@ export function apply(ctx, rawConfig = {}) {
     // 4) 门禁
     const leadId = agent?.session?.header?.id ?? agent?.id
     const gateOpen = consultedSinceUser.get(leadId) === true
+    const takeoverNow = currentTakeover(agent)
+    add('PASS', t('label.takeover'), takeoverLine(agent))
     add(
       'PASS',
       '问用户门禁',
-      gateOpen ? '已咨询指挥员，可以问用户' : '关闭（常态：问用户前需先 commander say + wait）',
+      requiresConsultBeforeAsking(takeoverNow.state)
+        ? gateOpen
+          ? '全接管，但本轮已咨询（可问用户）'
+          : '全接管：问用户前必须先 commander say + wait'
+        : '不拦（当前接管状态不需要先咨询）',
     )
 
     // 5) UI 组件
@@ -2436,9 +2540,14 @@ export function apply(ctx, rawConfig = {}) {
             ? `- ${t('label.pending')}：\`${pending.requestId}\`（target=${pending.target}，已等待 ${Math.max(0, Math.round((Date.now() - pending.sentAt) / 1000))}s；用 commander.wait 恢复等待）`
             : `- ${t('label.pending')}：（无）`,
       )
+      lines.push(`- ${t('label.takeover')}：${takeoverLine(agent)}`)
       lines.push(
         `- ${t('label.askGate')}：${
-          consultedSinceUser.get(leadId) === true ? '已咨询指挥员（可问用户）' : '关闭（先 say + wait 再问用户）'
+          requiresConsultBeforeAsking(currentTakeover(agent).state)
+            ? consultedSinceUser.get(leadId) === true
+              ? '全接管，但本轮已咨询（可问用户）'
+              : '全接管：问用户前必须先 say + wait'
+            : '不拦（当前接管状态不需要先咨询）'
         }`,
       )
       const approval = approvedSessions.get(leadId)
@@ -2803,7 +2912,7 @@ export function apply(ctx, rawConfig = {}) {
     t('help.empty', { cmd: config.commandName }),
   ].join('\n')
 
-  const COMMAND_VERBS = ['start', 'list', 'status', 'doctor', 'checks', 'say', 'ask', 'round', 'wait', 'cancel', 'record', 'help']
+  const COMMAND_VERBS = ['start', 'list', 'status', 'doctor', 'checks', 'takeover', 'say', 'ask', 'round', 'wait', 'cancel', 'record', 'help']
   const COMMAND_ALIASES = new Map([
     ['启动', 'start'], ['开始', 'start'],
     ['列表', 'list'], ['状态', 'status'],
@@ -2811,6 +2920,7 @@ export function apply(ctx, rawConfig = {}) {
     ['等待', 'wait'], ['取消', 'cancel'],
     ['记录', 'record'], ['帮助', 'help'], ['说明', 'help'],
     ['自检', 'doctor'], ['体检', 'doctor'], ['检查', 'checks'],
+    ['接管', 'takeover'], ['指挥', 'takeover'],
   ])
 
   /** 编辑距离（含相邻换位），只用于给拼错的子命令一个提示。 */
@@ -2930,6 +3040,40 @@ export function apply(ctx, rawConfig = {}) {
         const report = await doctorReport(agent, cwd, { fix })
         return { kind: report.fails > 0 ? 'error' : 'success', text: report.text }
       }
+      if (verb === 'takeover') {
+        assertRootAgent(agent)
+        const leadId = rootSessionIdOf(agent)
+        const requested = rest.length > 0 ? rest.split(/\s+/)[0] : ''
+        if (requested.length === 0) {
+          const { state, source } = currentTakeover(agent)
+          return {
+            kind: 'success',
+            text:
+              `接管状态：${takeoverLine(agent)}\n` +
+              `可选：${TAKEOVER_STATES.join(' / ')}；用 \`/${config.commandName} takeover <状态>\` 切换。\n` +
+              `- off 无指挥：任何门禁都不生效\n` +
+              `- observe 不接管：指挥员只当顾问\n` +
+              `- partial 部分接管：goal 命令与放行归指挥员\n` +
+              `- full 全接管：连问用户都要先过指挥员（你不在场时用）`,
+          }
+        }
+        if (requested === 'reset' || requested === 'auto') {
+          await setTakeoverOverride(leadId, undefined)
+          return { kind: 'success', text: `已清除覆盖，接管状态回到推导值：${takeoverLine(agent)}` }
+        }
+        const normalized = normalizeTakeover(requested)
+        if (!normalized) {
+          return {
+            kind: 'error',
+            text: `未知接管状态 "${requested}"；可选：${TAKEOVER_STATES.join(' / ')}，或 reset 回到推导值。`,
+          }
+        }
+        await setTakeoverOverride(leadId, normalized)
+        return {
+          kind: 'success',
+          text: `接管状态已设为：${TAKEOVER_LABELS[normalized]}（${normalized}）。${takeoverLine(agent)}`,
+        }
+      }
       if (verb === 'checks') {
         assertRootAgent(agent)
         const cwd = await resolveCwd(ctx, agent, signal)
@@ -2999,5 +3143,80 @@ export function apply(ctx, rawConfig = {}) {
       disposeCommander()
       disposeRecord()
     }
+  })
+
+  // 接管状态：启动时把持久化覆盖读进内存；再挂一个只读/可写的 HTTP 路由给客户端图标。
+  //
+  // 用 handler 而不是 resource：宿主的 resource 路由只接受 GET/HEAD，POST 会被直接
+  // 405 掉，而图标点击需要写状态。
+  hydrateTakeover().catch(() => {})
+  ctx.effect(() => {
+    const webServer = ctx.get('webServer')
+    if (!webServer || typeof webServer.register !== 'function') return
+    const sendJson = (res, body, status = 200) => {
+      const payload = JSON.stringify(body)
+      res.writeHead(status, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+        'content-length': Buffer.byteLength(payload),
+      })
+      res.end(payload)
+    }
+    const readBody = (req) =>
+      new Promise((resolveBody) => {
+        let data = ''
+        req.on('data', (chunk) => {
+          data += chunk
+          if (data.length > 8192) req.destroy()
+        })
+        req.on('end', () => resolveBody(data))
+        req.on('error', () => resolveBody(''))
+      })
+    return webServer.register({
+      kind: 'prefix',
+      path: '/commander/takeover',
+      handler: async (req, res) => {
+        const url = new URL(req.url ?? '/', 'http://localhost')
+        let sessionId = url.searchParams.get('sessionId') ?? ''
+        let payload
+        if (req.method === 'POST') {
+          const raw = await readBody(req)
+          try {
+            payload = raw.length > 0 ? JSON.parse(raw) : {}
+          } catch {
+            return sendJson(res, { error: 'invalid json' }, 400)
+          }
+          if (typeof payload?.sessionId === 'string' && payload.sessionId.length > 0) {
+            sessionId = payload.sessionId
+          }
+        }
+        if (!sessionId) return sendJson(res, { error: 'sessionId required' }, 400)
+        const agent = ctx.get('agents')?.get?.(sessionId)
+        const current = agent
+          ? currentTakeover(agent)
+          : resolveTakeover({ hasCommander: false, goalActive: false, override: takeoverOverrides.get(sessionId)?.state })
+        if (req.method === 'GET' || req.method === 'HEAD') {
+          return sendJson(res, {
+            state: current.state,
+            source: current.source,
+            label: TAKEOVER_LABELS[current.state] ?? current.state,
+            states: TAKEOVER_STATES,
+          })
+        }
+        if (req.method === 'POST') {
+          const requested = payload?.state === 'next' ? nextTakeover(current.state) : payload?.state
+          const normalized = normalizeTakeover(requested)
+          if (!normalized) return sendJson(res, { error: 'invalid state', states: TAKEOVER_STATES }, 400)
+          await setTakeoverOverride(sessionId, normalized)
+          return sendJson(res, {
+            state: normalized,
+            source: 'user',
+            label: TAKEOVER_LABELS[normalized] ?? normalized,
+            states: TAKEOVER_STATES,
+          })
+        }
+        return sendJson(res, { error: 'method not allowed' }, 405)
+      },
+    })
   })
 }

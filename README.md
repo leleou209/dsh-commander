@@ -170,6 +170,24 @@ checkCommands:
 - 分级前缀 `[信息]/[注意]/[失败]`；「已生效」与「失败」不混用；
 - `locale` 支持 `zh-CN` / `en`（`zh`、`zh-Hans` 归一化到 `zh-CN`）。
 
+## 接管状态（takeover，2.9.12）
+
+指挥员对主会话的接管程度有四个状态，决定**哪些门禁生效**：
+
+| 状态 | 含义 | 问用户 | goal 的 complete/edit/pause/blocked |
+| --- | --- | --- | --- |
+| `off` 无指挥 | 没有指挥员 | 自由 | 自由 |
+| `observe` 不接管 | 指挥员只当顾问 | 自由 | 自由 |
+| `partial` 部分接管 | 接管 goal 命令与放行 | 自由 | 需要放行/批准 |
+| `full` 全接管 | 你不在场，指挥员代言 | **必须先咨询** | 需要放行/批准 |
+
+- 默认**推导**：没有 teammate → `off`；有 teammate 且 goal active → `partial`；否则 `observe`。
+- 显式覆盖：`/commander takeover <off|observe|partial|full>`，或 `/commander takeover reset` 回到推导；覆盖值写进 `state.json` 的 `takeover` 表。
+- 你发来真实消息时 `full` 自动降为 `partial`（你在打字就说明你在场），`status` 会显示「部分接管（auto）」。
+- composer 工具行（模型选择器与发送键之间）有一个**皇冠图标**显示当前状态：灰色=观察、蓝色=部分、琥珀=全接管，点击循环切换。
+
+> 这就是 2.9.0–2.9.11 那条「每轮问用户都要先过指挥员」的收窄：只有 `full` 才拦。`off`/`observe` 下问凭据、选文件这类只有用户能答的问题不再白烧两轮。
+
 ## 中断恢复
 
 - **用户中断**：用户主动取消/打断、UI 暂停；记录 `source=user`，默认不自动恢复，但指挥员可显式 `批准：goal resume`。

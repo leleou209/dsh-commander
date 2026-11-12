@@ -18,7 +18,7 @@ const zhCN = {
 
   // ---- help ----
   'help.usage1': '用法：/{cmd} <任意需求或问题>   ← 直接发给指挥员',
-  'help.usage2': '      /{cmd} [start|list|status|doctor|checks [名称]|say <消息>|wait [请求号]|cancel [请求号]|record <摘要>|help]',
+  'help.usage2': '      /{cmd} [start|list|status|doctor|checks [名称]|takeover [状态]|say <消息>|wait [请求号]|cancel [请求号]|record <摘要>|help]',
   'help.empty': '不带参数只显示本说明（不会创建指挥员或 goal）。',
 
   // ---- start ----
@@ -57,7 +57,13 @@ const zhCN = {
   'persist.overLimit': '状态文件超过大小上限，已备份后重置',
 
   // ---- 门禁 / 批准 ----
-  'gate.needCommander': '先咨询指挥员再问用户：请用 commander(action=say) 说明卡点并请求「暂时作结」，再 wait；拿到「需澄清」+ 批准 pause 后，才暂停 goal、问用户、本轮结束。',
+  'gate.needCommander': '当前是全接管（{state}）：先 commander(action=say) 说明卡点并请求「暂时作结」，再 wait；拿到「需澄清」+ 批准 pause 后，才暂停 goal、问用户、本轮结束。想直接问用户就先 /commander takeover partial。',
+  'label.takeover': '接管状态',
+  'takeover.off': '无指挥',
+  'takeover.observe': '不接管',
+  'takeover.partial': '部分接管',
+  'takeover.full': '全接管',
+  'takeover.hint': '点击切换：不接管 → 部分接管 → 全接管 → 无指挥',
   'gate.needApproval': 'goal {action} 需要指挥员批准：先在汇报里请求，并取得「批准：goal {action}」。',
   'gate.needApprovalPhase': 'goal {action} 需要指挥员批准（当前阶段 {phase}；若批准已在 wait 里被插件执行，无需再调 update_goal）。',
   'gate.needRelease': '没有有效的「允许结束」放行，不能结束 goal：先 commander(action=wait) 取得放行。',
@@ -149,7 +155,7 @@ const en = {
   'level.warn': '[warn]',
   'level.error': '[error]',
   'help.usage1': 'Usage: /{cmd} <any request or question>   ← goes straight to the commander',
-  'help.usage2': '       /{cmd} [start|list|status|doctor|checks [name]|say <message>|wait [requestId]|cancel [requestId]|record <summary>|help]',
+  'help.usage2': '       /{cmd} [start|list|status|doctor|checks [name]|takeover [state]|say <message>|wait [requestId]|cancel [requestId]|record <summary>|help]',
   'help.empty': 'Without arguments this help is shown; no commander or goal is created.',
   'start.created': 'Commander created; you can start the conversation.',
   'start.ready': 'Commander ready (same session, no new card).',
@@ -180,7 +186,13 @@ const en = {
   'persist.migrated': 'read from older version {from}; data preserved',
   'persist.broken': 'state file was corrupt; backed up to {path} and continued empty',
   'persist.overLimit': 'state file exceeds the size limit; backed up and reset',
-  'gate.needCommander': 'Consult the commander before asking the user: commander(action=say) to report the blocker and request a pause; then wait. Only after "需澄清" plus a pause approval may you pause the goal, ask the user, and end the turn.',
+  'gate.needCommander': 'Full takeover is active ({state}): commander(action=say) to report the blocker and request a pause, then wait. Only after a clarification decision plus a pause approval may you pause the goal, ask the user, and end the turn. To ask directly, run /commander takeover partial first.',
+  'label.takeover': 'Takeover',
+  'takeover.off': 'No commander',
+  'takeover.observe': 'Observe',
+  'takeover.partial': 'Partial',
+  'takeover.full': 'Full',
+  'takeover.hint': 'Click to cycle: observe → partial → full → off',
   'gate.needApproval': 'goal {action} needs commander approval: request it in a report and obtain "批准：goal {action}".',
   'gate.needApprovalPhase': 'goal {action} needs commander approval (current phase {phase}; if the approval was already applied during wait, do not call update_goal again).',
   'gate.needRelease': 'No valid "允许结束" release; cannot end the goal. Use commander(action=wait) to obtain one.',

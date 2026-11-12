@@ -293,10 +293,31 @@ assert.ok(spawnCalls[0].request.prompt[0].text.includes('请求：'), 'prompt re
 const teammateAgent = { id: 'teammate-1' }
 const approvalGuard = guards[0]
 const guard = guards[1]
-assert.ok(
-  String(approvalGuard({ agent: rootAgent, name: 'ask_user_question', arguments: {} })).includes('先咨询指挥员'),
-  'asking the user before consulting commander is denied',
+// 2.9.12 起问用户门禁只对「全接管」生效：goal active 时是 partial，应当放行。
+assert.equal(
+  approvalGuard({ agent: rootAgent, name: 'ask_user_question', arguments: {} }),
+  undefined,
+  'partial takeover does not block asking the user',
 )
+const takeoverCmd = commands.get('commander')
+await takeoverCmd.handler({
+  commandId: 'takeover',
+  agent: rootAgent,
+  rawInput: 'takeover full',
+  attachments: [],
+  signal: new AbortController().signal,
+})
+assert.ok(
+  String(approvalGuard({ agent: rootAgent, name: 'ask_user_question', arguments: {} })).includes('全接管'),
+  'full takeover blocks asking the user until consulted',
+)
+await takeoverCmd.handler({
+  commandId: 'takeover',
+  agent: rootAgent,
+  rawInput: 'takeover partial',
+  attachments: [],
+  signal: new AbortController().signal,
+})
 assert.ok(
   String(approvalGuard({ agent: rootAgent, name: 'update_goal', arguments: { action: 'complete' } })).includes('没有有效'),
   'goal complete blocked without release',
@@ -862,13 +883,26 @@ assert.ok(/超时|killed/.test(checkResult.text), 'timeout is killed and reporte
 checkResult = await commander.execute({ action: 'checks', name: 'not-configured' }, exec(rootAgent))
 assert.ok(checkResult.text.includes('没有名为'), 'unconfigured check is rejected')
 
-// 12d) 合成消息不清零「已咨询」：只有真实用户消息才重置门禁
+// 12d) 全接管下的门禁：真实用户消息把 full 降级为 partial，于是又能问用户
+// 先来一条真实用户消息（consulted=false），再切 full —— 这才是「我走了」的真实顺序
+emit('session/event', rootAgent.session, { type: 'user/message', data: { source: { kind: 'user' } } })
+await takeoverCmd.handler({
+  commandId: 'takeover',
+  agent: rootAgent,
+  rawInput: 'takeover full',
+  attachments: [],
+  signal: new AbortController().signal,
+})
+assert.ok(
+  String(approvalGuard({ agent: rootAgent, name: 'ask_user_question', arguments: {} })).includes('全接管'),
+  'full takeover blocks asking the user',
+)
 value = await commander.execute({ action: 'say', message: '门禁重置测试' }, exec(rootAgent))
 await invoke('cancel')
 assert.equal(
   approvalGuard({ agent: rootAgent, name: 'ask_user_question', arguments: {} }),
   undefined,
-  'consulted opens the ask gate',
+  'consulted opens the ask gate even under full takeover',
 )
 emit('session/event', rootAgent.session, { type: 'user/message', data: { source: { kind: 'agent-message' } } })
 assert.equal(
@@ -877,10 +911,13 @@ assert.equal(
   'synthetic message does not reset the gate',
 )
 emit('session/event', rootAgent.session, { type: 'user/message', data: { source: { kind: 'user' } } })
-assert.ok(
-  String(approvalGuard({ agent: rootAgent, name: 'ask_user_question', arguments: {} })).includes('先咨询指挥员'),
-  'real user message resets the gate',
+assert.equal(
+  approvalGuard({ agent: rootAgent, name: 'ask_user_question', arguments: {} }),
+  undefined,
+  'a real user message downgrades full to partial, so asking is allowed again',
 )
+const afterReturn = await commander.execute({ action: 'status' }, exec(rootAgent))
+assert.ok(afterReturn.text.includes('部分接管'), 'status shows the downgraded takeover state')
 
 // 12) interruption classification: abnormal resumes goal, user abort does not
 goalState.current = { ...goalState.current, phase: 'active', activation: 'disarmed', revision: 10 }
