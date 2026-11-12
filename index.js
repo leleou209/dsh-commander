@@ -36,7 +36,7 @@ import {
 import { createTranslator, localeKeyDiff } from './messages.js'
 
 /** 运行时版本标记：status 里显示，用来确认当前进程加载的是哪一版代码（HMR 是否生效）。 */
-const PLUGIN_VERSION = '2.9.12'
+const PLUGIN_VERSION = '2.9.13'
 
 /** 从 DSH 安装目录加载 schemastery；失败时插件仍可运行，只是 Plugin Manager 不显示 Config。 */
 function loadSchemaLib() {
@@ -244,7 +244,8 @@ const COMMANDER_OUTPUT_SCHEMA = {
     goalAction: { type: 'string' },
     goal: { type: 'string' },
     docs: { type: 'array', items: { type: 'string' } },
-    goal: { type: 'string' },
+    /** checks 的退出码（只有真的跑了命令才有）。 */
+    exitCode: { type: 'number' },
   },
 }
 

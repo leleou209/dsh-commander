@@ -37,7 +37,7 @@ commander action=start               # 主agent调用
 压缩包形态（`npm pack` 产物）只作为归档/传输用，见 Releases 页面：
 
 ```sh
-tar -xzf local-dsh-commander-2.9.12.tgz
+tar -xzf local-dsh-commander-2.9.13.tgz
 # 得到 package/，改名为 dsh-commander 后按目录方式安装
 ```
 
