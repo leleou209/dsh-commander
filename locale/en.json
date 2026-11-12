@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Commander Mode",
+    "description": "Commander Mode: one durable, resumable Agent Teams teammate \"Commander\" that designs architecture and feature increments, reads every file, runs read-only shell commands, and may write doc but is asked not to by default; it decides most questions itself and never blocks goals."
+  }
+}

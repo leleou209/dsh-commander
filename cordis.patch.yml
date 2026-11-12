@@ -1,0 +1,26 @@
+# 指挥员模式（dsh-commander）伴生插件。
+#
+# 配置项全部可省略；下面的值就是默认值。
+# commander：Host 指挥员；transcript-window：限制 UI 初始历史窗口（15 turn）。
+- insert:
+    - id: commander
+      name: '@local/dsh-commander'
+      config:
+        provider: spawn
+        commanderName: commander
+        goalMode: augment
+        docsDir: doc
+        locale: zh-CN
+        # 受控检查：只有这里列出的命令能被 commander(action=checks) 执行。
+        # 例：checkCommands:
+        #       - offline = node test/offline.mjs
+        checkCommands: []
+        checkTimeoutMs: 180000
+    - id: commander-transcript-window
+      name: '@local/dsh-commander/transcript-window'
+      config:
+        # 只压客户端历史请求的上限（maxMessages/minTurns/minMessages），不删日志、不改模型上下文。
+        enabled: true
+        turns: 15
+        messagesPerTurn: 2
+        debug: false

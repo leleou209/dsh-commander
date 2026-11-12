@@ -1,0 +1,35 @@
+{
+  "name": "@local/dsh-commander",
+  "version": "2.9.10",
+  "private": true,
+  "type": "module",
+  "description": "指挥员模式（dsh-commander）：一个长期在线、可续接的 Agent Teams teammate「指挥员」，负责架构设计、功能铺展与督察验收；可读全部文件、跑只读 shell 与受控检查命令、可写 doc 但默认不动手。",
+  "exports": {
+    ".": "./index.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./transcript-window": "./transcript-window.js"
+  },
+  "files": [
+    "index.js",
+    "protocol.js",
+    "code-state.js",
+    "state-store.js",
+    "messages.js",
+    "transcript-window.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "test/offline.mjs",
+    "test/regressions.mjs",
+    "test/state-store.mjs",
+    "test/transcript-window.mjs",
+    "INSTALL.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

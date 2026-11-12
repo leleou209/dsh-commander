@@ -1,0 +1,24 @@
+# 依赖与产物
+node_modules/
+dist/
+*.tgz
+*.tar.gz
+*.zip
+
+# 运行时状态（插件自己写到 ~/.dsh/commander，不该进仓库）
+state.json
+state.json.lock
+state.json.*.tmp
+state.json.broken-*
+transcript-window.log
+
+# 编辑器 / 系统
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# 日志与临时文件
+*.log
+npm-debug.log*
