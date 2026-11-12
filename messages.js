@@ -57,7 +57,7 @@ const zhCN = {
   'persist.overLimit': '状态文件超过大小上限，已备份后重置',
 
   // ---- 门禁 / 批准 ----
-  'gate.needCommander': '当前是全接管（{state}）：先 commander(action=say) 说明卡点并请求「暂时作结」，再 wait；拿到「需澄清」+ 批准 pause 后，才暂停 goal、问用户、本轮结束。想直接问用户就先 /commander takeover partial。',
+  'gate.needCommander': '当前是全接管：先 commander(action=say) 说明卡点并请求「暂时作结」，再 wait；拿到「需澄清」+ 批准 pause 后，才暂停 goal、问用户、本轮结束。想直接问用户就先 /commander takeover partial。',
   'label.takeover': '接管状态',
   'takeover.off': '无指挥',
   'takeover.observe': '不接管',
@@ -186,7 +186,7 @@ const en = {
   'persist.migrated': 'read from older version {from}; data preserved',
   'persist.broken': 'state file was corrupt; backed up to {path} and continued empty',
   'persist.overLimit': 'state file exceeds the size limit; backed up and reset',
-  'gate.needCommander': 'Full takeover is active ({state}): commander(action=say) to report the blocker and request a pause, then wait. Only after a clarification decision plus a pause approval may you pause the goal, ask the user, and end the turn. To ask directly, run /commander takeover partial first.',
+  'gate.needCommander': 'Full takeover is active: commander(action=say) to report the blocker and request a pause, then wait. Only after a clarification decision plus a pause approval may you pause the goal, ask the user, and end the turn. To ask directly, run /commander takeover partial first.',
   'label.takeover': 'Takeover',
   'takeover.off': 'No commander',
   'takeover.observe': 'Observe',

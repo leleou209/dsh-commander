@@ -897,7 +897,7 @@ export function apply(ctx, rawConfig = {}) {
         // 只有「全接管」才强制先咨询：partial/observe/off 下问用户不该被拦。
         const takeover = currentTakeover(agent)
         if (requiresConsultBeforeAsking(takeover.state) && consultedSinceUser.get(leadId) !== true) {
-          return t('gate.needCommander', { state: TAKEOVER_LABELS[takeover.state] ?? takeover.state })
+          return t('gate.needCommander')
         }
       }
       if (config.enforceApproval !== true) return undefined
