@@ -13,7 +13,7 @@ import { dirname } from 'node:path'
 /** 当前 schema 版本（写入 `schema` 字段；`version` 保留为插件版本字符串）。 */
 export const STATE_SCHEMA = 3
 /** 状态文件的四张表。 */
-export const STATE_TABLES = ['pending', 'interruptions', 'approvals', 'rounds']
+export const STATE_TABLES = ['pending', 'interruptions', 'approvals', 'rounds', 'takeover']
 
 const DEFAULT_MAX_BYTES = 256 * 1024
 const DEFAULT_KEEP_PER_TABLE = 200

@@ -2,6 +2,14 @@
 
 版本号与 `package.json` / `index.js` 里的 `PLUGIN_VERSION` 一致；`/commander status` 首行显示运行中的版本。
 
+## 2.9.12
+
+- **接管状态（takeover）四态**：`off 无指挥` / `observe 不接管` / `partial 部分接管` / `full 全接管`。默认推导（无指挥员=off、有 goal=partial、否则 observe），可用 `/commander takeover <状态>` 显式覆盖并落盘；用户发来真实消息时 `full` 自动降为 `partial`。
+- **问用户门禁收窄到「全接管」**：`ask_user_question` 只在 `full` 下强制先咨询指挥员；`observe`/`partial` 直接问，不再为凭据、路径这类只有用户能答的问题白烧两轮。
+- **goal 门禁按状态生效**：`complete/edit/pause/blocked` 只在 `partial`/`full` 下需要放行或批准。
+- **composer 图标**：客户端半注册到 `conversation.input.right`（模型选择器与发送键之间），用皇冠图标显示接管状态（灰=观察、蓝=部分、琥珀=全接管），点击循环切换；数据来自 Host 的 `/commander/takeover` 路由。
+- `status` / `doctor` 新增「接管状态」行，并把门禁说明改成带原因的文字。
+
 ## 2.9.11
 
 - **修复只读 shell 误判重定向**：`--format='%h %an <%ae>'` 这类引号内的 `>`、`2>&1` 文件描述符复制、`>$null` / `>/dev/null` 空设备都不再被当成写文件；真正的 `> out.txt` / `>> log` 仍然拦截。
