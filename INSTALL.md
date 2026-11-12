@@ -1,68 +1,78 @@
-# 安装与测试（另一个 DSH 环境）
+# 安装（另一个 DSH 环境）
 
-## 目录安装（推荐）
+本插件是 **DSH bundle**（Host 插件 + 一个默认启用的伴生窗口插件），不需要编译，也没有 npm 运行时依赖。
 
-1. 把整个 `dsh-commander` 目录复制到目标机器任意位置；
-2. 在目标 DSH 的会话里执行：
+## 方式一：从 GitHub 克隆（推荐）
 
-```text
-plugin_manager install_bundle target: "<绝对路径>/dsh-commander"
+```sh
+git clone https://github.com/leleou209/dsh-commander.git
 ```
 
-3. 安装后确认 bundle 已启用：
+然后在目标 DSH 的会话里执行（路径换成你的克隆位置）：
+
+```text
+plugin_manager install_bundle target: "<克隆路径>/dsh-commander"
+```
+
+确认已启用：
 
 ```text
 plugin_manager list_bundles
-plugin_manager set_bundle target: "@local/dsh-commander" enabled: true
 ```
 
-4. 刷新页面，然后在会话里：
+应能看到 `@local/dsh-commander`（版本与 `/commander status` 首行一致）、`enabled: true`，以及两行：`commander` 与 `commander-transcript-window`。
+
+刷新页面，然后任选一种开始：
 
 ```text
-/commander start
+/commander start                     # 创建指挥员
+/commander 你帮我梳理这个仓库的架构    # 直接发需求
+commander action=start               # 主agent调用
 ```
 
-或让主agent调用：
+## 方式二：离线目录 / 压缩包
 
-```text
-commander action=start
-```
+把 `dsh-commander/` 整个目录复制到目标机器任意位置（不要放进 DSH 安装目录），按上面同样的 `install_bundle` 步骤安装。
 
-## 交付物
-
-本版本随包提供两种形态：
-
-| 形态 | 路径 | 用法 |
-| --- | --- | --- |
-| 目录（推荐） | `dsh-commander-2.9.10/` | 直接作为 `install_bundle` 的 `target` 绝对路径 |
-| 压缩包 | `local-dsh-commander-2.9.10.tgz` | 归档/传输；解压后得到 `package/`，按目录方式安装 |
-
-tgz 由 `npm pack` 生成，文件名取自包名 `local-dsh-commander`，不要把它当目录路径传给 `install_bundle`，除非目标 DSH 版本明确支持 npm 文件 spec。解压示例：
+压缩包形态（`npm pack` 产物）只作为归档/传输用，见 Releases 页面：
 
 ```sh
-tar -xzf local-dsh-commander-2.9.10.tgz
-# 得到 package/，把 package 改名为 dsh-commander-2.9.10 后按上面的目录安装
+tar -xzf local-dsh-commander-2.9.11.tgz
+# 得到 package/，改名为 dsh-commander 后按目录方式安装
 ```
+
+> `*.tgz` 不进 git 仓库；需要时从 GitHub Releases 下载。
 
 ## 依赖
 
-- 已启用 Agent Teams（teammate 能力）；
+- 目标环境已启用 Agent Teams（teammate 能力）；
 - 主agent具备 `commander` / `commander_record` 工具；
-- 无需 npm 依赖；schemastery 从 DSH 安装目录动态加载。
+- 无 npm 依赖；`schemastery` 从 DSH 安装目录动态加载。
 
-## 验证
+## 安装后自检
 
-在插件目录执行：
+在插件目录跑四套离线测试：
 
 ```sh
 node test/offline.mjs
+node test/regressions.mjs
+node test/state-store.mjs
 node test/transcript-window.mjs
 ```
 
-预期：`ALL CHECKS PASSED` / `TRANSCRIPT WINDOW CHECKS PASSED`。
+预期依次是 `ALL CHECKS PASSED` / `REGRESSION CHECKS PASSED` / `STATE STORE CHECKS PASSED` / `TRANSCRIPT WINDOW CHECKS PASSED`。
+
+在 DSH 里：
+
+```text
+/commander doctor
+```
+
+一条命令给出 PASS/WARN/FAIL：安装目录与 profile 是否一致、三处版本是否一致、状态文件权限与读写、问用户门禁、历史窗口、当前 `CODE_STATE`。
 
 ## 注意
 
-- `commander-transcript-window` 默认 `enabled: false`：Host 侧包装未影响客户端初始历史流，待 Client 版。
-- 旧 teammate 卡片描述不可改；新环境首次 `commander start` 会显示「指挥员」描述。
-- 当前 bundle 为 Host-only；UI 窗口插件尚未完成。
+- `commander-transcript-window` 默认启用，只压客户端历史请求的上限（默认 15 turn / 单页 34 条），不删日志、不改模型上下文；
+- 状态文件在 `~/.dsh/commander/state.json`（目录 `0700`、文件 `0600`），可用配置 `statePath` 改；
+- 旧 teammate 卡片描述不可改；新环境首次 `commander start` 显示「指挥员」；
+- 改完插件源码后 HMR 不会重载 linked bundle：用 `plugin_manager set_bundle` 关掉再开，或重启 DSH，然后用 `/commander status` 首行确认版本。

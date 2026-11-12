@@ -2,6 +2,16 @@
 
 长线工作的「指挥员模式」：把一个**长期在线、可续接的 Agent Teams teammate** 装成「指挥员」（架构设计 + 督察指挥）。它读全部项目文件、跑只读 shell、可写文件但默认不动手，并通过 `send_message` 与 Lead 多轮对话。斜杠命令 `/commander`。
 
+> 当前版本 **2.9.11**，见 [CHANGELOG.md](CHANGELOG.md)。安装见 [INSTALL.md](INSTALL.md)，最短路径：
+>
+> ```sh
+> git clone https://github.com/leleou209/dsh-commander.git
+> # 然后在 DSH 会话里：
+> # plugin_manager install_bundle target: "<克隆路径>/dsh-commander"
+> ```
+>
+> 装完 `/commander doctor` 一条命令自检。
+
 ## 形态：一个 teammate，不是每轮一张新卡
 
 - 指挥员是 Agent Teams 的 teammate；内部 target 为 `commander`（Agent Teams 要求 ASCII kebab-case），界面描述统一为「指挥员」。
@@ -266,3 +276,13 @@ node test/transcript-window.mjs
 - 轮次只统计有有效决策的回复；interrupt/失败不计入轮次。
 - 外部改代码会在 `update_goal complete` 前的异步校验中被拒绝，不需要先跑 `status`。
 - `doc/plan.md` / `doc/agent.md` 指挥员有写权限但默认不动手；需要自动留痕时可让它写，或由主agent维护。
+
+## 许可证
+
+[MIT](LICENSE) © 2026 leleou209
+
+## 状态文件与隐私
+
+- 运行时数据只写在 `~/.dsh/commander/state.json`（pending 请求、放行记录、中断记录、轮次计数）与可选的 `transcript-window.log`（仅 `debug: true` 时写）；
+- 仓库里不含任何会话内容、密钥或本机绝对路径；
+- 指挥员的读写范围由配置 `writeScope`（默认 `doc/`）与只读工具白名单约束，**它不是安全沙箱**。

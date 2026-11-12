@@ -25,7 +25,7 @@ import { createStateStore, STATE_TABLES } from './state-store.js'
 import { createTranslator, localeKeyDiff } from './messages.js'
 
 /** 运行时版本标记：status 里显示，用来确认当前进程加载的是哪一版代码（HMR 是否生效）。 */
-const PLUGIN_VERSION = '2.9.10'
+const PLUGIN_VERSION = '2.9.11'
 
 /** 从 DSH 安装目录加载 schemastery；失败时插件仍可运行，只是 Plugin Manager 不显示 Config。 */
 function loadSchemaLib() {
@@ -610,16 +610,94 @@ function gitSubcommand(tokens) {
   return { sub: '' }
 }
 
+/**
+ * 按引号外的分隔符把命令行切成若干「独立命令」。
+ *
+ * 分隔符：换行、`;`、`&&`、`||`、`|`。引号内的这些字符是数据
+ * （例如 `Select-String -Pattern 'a|b'`），不切段。
+ */
+function splitUnquotedCommands(text) {
+  const source = String(text ?? '')
+  const segments = []
+  let current = ''
+  let quote
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index]
+    if (quote) {
+      current += char
+      if (char === quote) quote = undefined
+      continue
+    }
+    if (char === '"' || char === "'") {
+      quote = char
+      current += char
+      continue
+    }
+    if (char === '\n' || char === '\r' || char === ';') {
+      segments.push(current)
+      current = ''
+      continue
+    }
+    if (char === '&' && source[index + 1] === '&') {
+      segments.push(current)
+      current = ''
+      index += 1
+      continue
+    }
+    if (char === '|') {
+      segments.push(current)
+      current = ''
+      // `||` 是两个字符的分隔符，吃掉第二个
+      if (source[index + 1] === '|') index += 1
+      continue
+    }
+    current += char
+  }
+  segments.push(current)
+  return segments.map((segment) => segment.trim()).filter((segment) => segment.length > 0)
+}
+
+/**
+ * 找出「引号外、且会写文件」的输出重定向。
+ *
+ * 返回命中的片段（如 `> out.txt`），没有则返回 undefined。
+ * 不算写文件的三种情况：引号内的 `>`（格式化字符串里的尖括号）、
+ * 文件描述符复制（`2>&1` / `1>&2`）、指向空设备（`>$null` / `>/dev/null`）。
+ */
+function unquotedFileRedirect(text) {
+  const source = String(text ?? '')
+  let quote
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index]
+    if (quote) {
+      if (char === quote) quote = undefined
+      continue
+    }
+    if (char === '"' || char === "'") {
+      quote = char
+      continue
+    }
+    if (char !== '>') continue
+    const rest = source.slice(index + 1)
+    // 2>&1 / 1>&2：复制文件描述符，不写文件
+    if (/^\d*&\d/.test(rest)) continue
+    // >$null / >/dev/null：丢弃输出，不写文件
+    if (/^\d*\s*(?:\$null\b|\/dev\/null\b)/i.test(rest)) continue
+    return source.slice(index, index + 24).trim()
+  }
+  return undefined
+}
+
 /** 只读 shell 的保守拦截：命令必须落在白名单内，禁止重定向/子表达式。 */
 function readOnlyShellViolation(command) {
   const text = String(command ?? '')
   if (text.trim().length === 0) return '空命令'
-  if (/>>?/.test(text)) return '包含输出重定向（> / >>）'
   if (/\$\(|`/.test(text)) return '包含子表达式/反引号'
-  const segments = text
-    .split(/\r?\n|;|\|\||&&|\|/)
-    .map((segment) => segment.trim())
-    .filter((segment) => segment.length > 0)
+  // 只认「引号外、且真的写文件」的重定向：`--format='%h %an <%ae>'` 里的 > 是数据，
+  // `2>&1` 是文件描述符复制，`>$null` / `>/dev/null` 不落盘，都不算写操作。
+  const redirect = unquotedFileRedirect(text)
+  if (redirect) return `包含输出重定向（${redirect}）`
+  const segments = splitUnquotedCommands(text)
   for (const segment of segments) {
     const tokens = segment.match(/"[^"]*"|'[^']*'|\S+/g) ?? []
     let first = String(tokens[0] ?? '').replace(/^['"]|['"]$/g, '')

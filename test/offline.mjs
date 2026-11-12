@@ -317,6 +317,47 @@ assert.equal(guard({ agent: teammateAgent, name: 'pwsh', arguments: { command: "
 assert.ok(String(guard({ agent: teammateAgent, name: 'pwsh', arguments: { command: 'npm run build' } })).includes('只读'))
 assert.ok(String(guard({ agent: teammateAgent, name: 'pwsh', arguments: { command: 'git commit -m x' } })).includes('只读'))
 
+// 2d) 管道/分号拆分也只看引号外（2.9.11）
+for (const cmd of [
+  "Select-String -Pattern 'a|b' index.js", // 引号内的 | 是正则
+  'rg "x||y" src',
+  'cat index.js | wc -l', // 真管道，但两段都在白名单
+  'git status && git log --oneline -1',
+]) {
+  assert.equal(
+    guard({ agent: teammateAgent, name: 'pwsh', arguments: { command: cmd } }),
+    undefined,
+    `${cmd} 应放行`,
+  )
+}
+for (const cmd of ['cat index.js | npm run build', 'git status; npm run build']) {
+  assert.ok(
+    String(guard({ agent: teammateAgent, name: 'pwsh', arguments: { command: cmd } })).includes('只读'),
+    `${cmd} 的第二段应被拒绝`,
+  )
+}
+
+// 2c) 重定向识别只看「引号外、且真写文件」的 >（2.9.11）
+for (const cmd of [
+  "git log --format='%h %an <%ae>'", // 尖括号是数据
+  'git log --format="%h <%ae>"',
+  'git status 2>&1', // 文件描述符复制
+  'git log >$null', // 空设备
+  'git log >/dev/null',
+]) {
+  assert.equal(
+    guard({ agent: teammateAgent, name: 'pwsh', arguments: { command: cmd } }),
+    undefined,
+    `${cmd} 不应被当成重定向`,
+  )
+}
+for (const cmd of ['git log > out.txt', 'git log 2> err.txt', 'git log >> log.txt']) {
+  assert.ok(
+    String(guard({ agent: teammateAgent, name: 'pwsh', arguments: { command: cmd } })).includes('重定向'),
+    `${cmd} 应被拒绝`,
+  )
+}
+
 // 2b) 只读 shell 白名单：补了校验/元数据命令，仍挡住会写文件的用法（P2-5）
 for (const cmd of [
   'git status --short',
