@@ -23,9 +23,20 @@ export function shouldHandoff(input = {}) {
   if (input.isLead !== true) return false
   if (input.takeover !== 'full') return false
   if (input.status !== 'idle') return false
+  // 只在「真的结束了一轮」之后交接：宿主的 idle 也包含 maintenance（压缩等），
+  // 那时候交接会把指令插进正在整理的会话里。
+  if (input.turnEnded !== true) return false
+  // 已经停运（指挥员挂死/超时）就不再驱动，等用户重新设定状态。
+  if (input.stopped === true) return false
   // 用户刚插过话：这一轮不交接，把方向盘交还给用户。
   if (input.interrupted === true) return false
   return true
+}
+
+/** 指挥员是否已经不可用（挂死/不存在）。 */
+export function commanderDead(member) {
+  if (member === undefined || member === null) return true
+  return member.status === 'failed'
 }
 
 /**
@@ -39,18 +50,14 @@ export function classifyReply(text) {
   return 'continue'
 }
 
-/** 交给指挥员的那段话：本轮输出 + 轮次 + 代码状态。 */
+/** 交给指挥员的那段话：本轮输出 + 当前任务 + 代码状态。 */
 export function renderReport(input = {}) {
-  const round = Number.isFinite(input.round) ? input.round : 0
   const report = String(input.report ?? '').trim()
+  const task = String(input.task ?? '').trim()
   const codeState = input.codeState ? String(input.codeState) : ''
-  const lines = [
-    `[自动交接 #${round}] 主agent 已停下，以下是它本轮的最后输出。`,
-    '',
-    report.length > 0 ? report : '（本轮没有可见输出）',
-    '',
-    '请给下一步指令：继续 / 需澄清 / 允许结束。',
-  ]
+  const lines = ['[自动交接] 主agent 已停下，以下是它本轮的最后输出。', '']
+  if (task.length > 0) lines.push(`当前任务：${task}`, '')
+  lines.push(report.length > 0 ? report : '（本轮没有可见输出）', '', '请给下一步指令：继续 / 需澄清 / 允许结束。')
   if (codeState.length > 0) lines.push('', `代码状态：${codeState}`)
   return lines.join('\n')
 }
@@ -63,6 +70,6 @@ export function renderInstruction(reply) {
     '',
     text.length > 0 ? text : '（指挥员回复为空）',
     '',
-    '注意：这是全接管下的自动交接，不要停下来问用户；拿不准就再汇报一轮。',
+    '注意：这是全接管下的自动交接，不要停下来问用户；进度以任务为单位汇报，不要用轮次计数。',
   ].join('\n')
 }

@@ -38,10 +38,10 @@ import {
   TAKEOVER_STATES,
 } from './takeover.js'
 import { createTranslator, localeKeyDiff } from './messages.js'
-import { classifyReply, HANDOFF_SOURCE, renderInstruction, renderReport, shouldHandoff } from './handoff.js'
+import { classifyReply, commanderDead, HANDOFF_SOURCE, renderInstruction, renderReport, shouldHandoff } from './handoff.js'
 
 /** 运行时版本标记：status 里显示，用来确认当前进程加载的是哪一版代码（HMR 是否生效）。 */
-const PLUGIN_VERSION = '2.9.23'
+const PLUGIN_VERSION = '2.9.24'
 
 /** 从 DSH 安装目录加载 schemastery；失败时插件仍可运行，只是 Plugin Manager 不显示 Config。 */
 function loadSchemaLib() {
@@ -851,6 +851,16 @@ export function apply(ctx, rawConfig = {}) {
     }
   }
 
+  /** 当前任务（goal 目标），作为交接汇报的进度锚点；没有 goal 就空。 */
+  function currentGoalObjective(agent) {
+    try {
+      const goal = ctx.get('goals')?.get?.(agent)
+      return typeof goal?.objective === 'string' ? goal.objective : ''
+    } catch {
+      return ''
+    }
+  }
+
   /** 指挥员 teammate 是否已经存在（同步，供门禁使用）。 */
   function commanderExists(agent) {
     try {
@@ -1553,6 +1563,18 @@ export function apply(ctx, rawConfig = {}) {
     return `${label}（${state}，${why}）`
   }
 
+  /** 自动交接一行：只报状态，不报轮次（进度以任务为单位看）。 */
+  function handoffLine(agent) {
+    if (currentTakeover(agent).state !== 'full') return '未启用（只有全接管才自动交接）'
+    const state = handoffStates.get(agent.id)
+    if (state === undefined) return '待触发（等这一轮结束）'
+    if (state.stopping) return '正在停止'
+    if (state.stopped) return '已停运（指挥员挂死或超时；重新设定接管状态即可恢复）'
+    if (state.inFlight) return '等待指挥员回复'
+    if (state.interrupted) return '你刚插过话，这一轮交还给你'
+    return '待触发（等这一轮结束）'
+  }
+
   /**
    * 把「接管状态已切换」写进会话，作为一条 runtime-context 的 user 消息。
    *
@@ -1590,6 +1612,9 @@ export function apply(ctx, rawConfig = {}) {
   // 指挥员，钩子等它的指令，再把它作为新一轮的输入唤醒主agent。轮次不限，只由
   // 指挥员声明任务完成来结束；中断就是中断，不改接管状态。
   const handoffStates = new Map()
+  /** 指挥员多久不回就判定卡住（毫秒）；轮次不限，但"无限等待"是另一回事。 */
+  const HANDOFF_WAIT_MS = 20 * 60 * 1000
+  const HANDOFF_POLL_MS = 30 * 1000
 
   function handoffStateFor(agent) {
     const existing = handoffStates.get(agent.id)
@@ -1599,7 +1624,8 @@ export function apply(ctx, rawConfig = {}) {
       inFlight: false,
       interrupted: false,
       stopping: false,
-      rounds: 0,
+      stopped: false,
+      turnEnded: false,
       lastSeq: 0,
       lastAt: 0,
       run: undefined,
@@ -1607,6 +1633,42 @@ export function apply(ctx, rawConfig = {}) {
     }
     handoffStates.set(agent.id, state)
     return state
+  }
+
+  /** 指挥员成员；取不到返回 undefined。 */
+  function commanderMember(agent) {
+    try {
+      const members = ctx.get('agentTeams')?.listMembers?.(agent) ?? []
+      return members.find((row) => row.role === 'teammate' && row.name === config.commanderName)
+    } catch {
+      return undefined
+    }
+  }
+
+  /**
+   * 等指挥员回复，但带看门狗：它挂死/超时就停运，不无限挂着。
+   * @returns {{kind: string, text?: string}} waitCommander 的原结果，或 {kind:'dead'|'timeout'}
+   */
+  async function waitCommanderGuarded(agent, requestId) {
+    let settled = false
+    const startedAt = Date.now()
+    const watchdog = (async () => {
+      while (!settled) {
+        await new Promise((done) => {
+          const timer = setTimeout(done, HANDOFF_POLL_MS)
+          timer.unref?.()
+        })
+        if (settled) return undefined
+        if (commanderDead(commanderMember(agent))) return { kind: 'dead' }
+        if (Date.now() - startedAt > HANDOFF_WAIT_MS) return { kind: 'timeout' }
+      }
+      return undefined
+    })()
+    try {
+      return await Promise.race([waitCommander(agent, requestId), watchdog])
+    } finally {
+      settled = true
+    }
   }
 
   /** 把指挥员的指令注入回主agent，并唤醒它开新一轮。 */
@@ -1643,6 +1705,8 @@ export function apply(ctx, rawConfig = {}) {
       isLead,
       takeover: currentTakeover(agent).state,
       status: agent.status,
+      turnEnded: state.turnEnded,
+      stopped: state.stopped,
       interrupted: state.interrupted,
     })
     if (!ready) {
@@ -1650,26 +1714,33 @@ export function apply(ctx, rawConfig = {}) {
       if (state.interrupted) state.interrupted = false
       return
     }
+    // 一次 turn/end 只交接一次。
+    state.turnEnded = false
     const session = agent.session
     const report = lastAssistantText(session, state.lastSeq, state.lastAt)
     state.lastSeq = session?.seq ?? 0
     state.lastAt = Date.now()
     if (report.trim().length === 0) return
     state.inFlight = true
-    state.rounds += 1
-    const round = state.rounds
     try {
       const cwd = await resolveCwd(ctx, agent, undefined).catch(() => process.cwd())
-      const sent = await sendToCommander(agent, undefined, renderReport({ round, report }), undefined, cwd)
-      const result = await waitCommander(agent, sent?.requestId)
+      const task = currentGoalObjective(agent)
+      const sent = await sendToCommander(agent, undefined, renderReport({ report, task }), undefined, cwd)
+      const result = await waitCommanderGuarded(agent, sent?.requestId)
       if (state.stopping) return
+      // 指挥员挂死 / 超时：停运即可，不无限挂着，也不改接管状态。
+      if (result?.kind === 'dead' || result?.kind === 'timeout') {
+        state.stopped = true
+        ctx.logger?.warn?.(`dsh-commander: 自动交接停运（${result.kind}）`)
+        return
+      }
       if (result?.kind !== 'reply') {
-        ctx.logger?.warn?.(`dsh-commander: 自动交接 #${round} 没拿到回复（${result?.kind ?? 'unknown'}）`)
+        ctx.logger?.warn?.(`dsh-commander: 自动交接没拿到回复（${result?.kind ?? 'unknown'}）`)
         return
       }
       const verdict = classifyReply(result.text)
       if (verdict === 'finish') {
-        ctx.logger?.info?.(`dsh-commander: 自动交接 #${round} 收到「允许结束」，停止驱动`)
+        ctx.logger?.info?.('dsh-commander: 自动交接收到「允许结束」，停止驱动')
         return
       }
       const pending = await loadPending(rootSessionIdOf(agent)).catch(() => undefined)
@@ -1717,9 +1788,24 @@ export function apply(ctx, rawConfig = {}) {
         handoffStateFor(agent).interrupted = true
         return
       }
-      if (event?.type === 'turn/end' && event.data?.reason?.kind === 'aborted') {
-        handoffStateFor(agent).interrupted = true
+      if (event?.type === 'turn/end') {
+        const state = handoffStateFor(agent)
+        if (event.data?.reason?.kind === 'aborted') state.interrupted = true
+        else state.turnEnded = true
       }
+    })
+    // 排队后世界变了：状态已不是全接管就拒绝这条交接指令，绝不带着过期指令开跑。
+    ctx.on('agent/pre-step', async ({ agent, messages }, next) => {
+      const mine = (messages ?? []).find(
+        (message) =>
+          message?.source?.kind === 'agent-message' && String(message.id ?? '').startsWith('commander-handoff-'),
+      )
+      if (mine === undefined) return next()
+      if (currentTakeover(agent).state !== 'full') {
+        handoffStateFor(agent).stopped = true
+        return { kind: 'reject' }
+      }
+      return next()
     })
     ctx.on('agent/disposed', ({ agent }) => {
       const state = handoffStates.get(agent.id)
@@ -2712,6 +2798,7 @@ export function apply(ctx, rawConfig = {}) {
             : `- ${t('label.pending')}：（无）`,
       )
       lines.push(`- ${t('label.takeover')}：${takeoverLine(agent)}`)
+      lines.push(`- ${t('label.handoff')}：${handoffLine(agent)}`)
       lines.push(
         `- ${t('label.askGate')}：${
           requiresConsultBeforeAsking(currentTakeover(agent).state)
@@ -3455,6 +3542,13 @@ export function apply(ctx, rawConfig = {}) {
           // 用户点了图标就是做了决定：写一条 developer 消息，主agent 下一轮就知道。
           // 状态没变就不写，免得反复点同一个选项刷屏。
           const announced = normalized === current.state ? false : announceTakeover(sessionId, normalized)
+          // 重新设定接管状态 = 显式要求重新开始，把「停运/让位」清掉。
+          const handoff = handoffStates.get(sessionId)
+          if (handoff !== undefined) {
+            handoff.stopped = false
+            handoff.interrupted = false
+            handoff.turnEnded = false
+          }
           return sendJson(res, {
             state: normalized,
             source: 'user',

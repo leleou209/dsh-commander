@@ -59,6 +59,7 @@ const zhCN = {
   // ---- 门禁 / 批准 ----
   'gate.needCommander': '当前是全接管：先 commander(action=say) 说明卡点并请求「暂时作结」，再 wait；拿到「需澄清」+ 批准 pause 后，才暂停 goal、问用户、本轮结束。想直接问用户就先 /commander takeover partial。',
   'label.takeover': '接管状态',
+  'label.handoff': '自动交接',
   'takeover.off': '不运行指挥职责（无指挥）',
   'takeover.observe': '不接管',
   'takeover.partial': '部分接管',
@@ -199,6 +200,7 @@ const en = {
   'persist.overLimit': 'state file exceeds the size limit; backed up and reset',
   'gate.needCommander': 'Full takeover is active: commander(action=say) to report the blocker and request a pause, then wait. Only after a clarification decision plus a pause approval may you pause the goal, ask the user, and end the turn. To ask directly, run /commander takeover partial first.',
   'label.takeover': 'Takeover',
+  'label.handoff': 'Auto handoff',
   'takeover.off': 'Not running commander duties',
   'takeover.observe': 'Observe',
   'takeover.partial': 'Partial',

@@ -7,10 +7,18 @@ import { classifyReply, HANDOFF_SOURCE, renderInstruction, renderReport, shouldH
 const checks = []
 const check = (name, fn) => checks.push({ name, fn })
 
-const base = { isLead: true, takeover: 'full', status: 'idle' }
+const base = { isLead: true, takeover: 'full', status: 'idle', turnEnded: true }
 
-check('正常情况：主agent 空闲 + 全接管 → 交接', () => {
+check('正常情况：主agent 空闲 + 刚结束一轮 + 全接管 → 交接', () => {
   assert.equal(shouldHandoff(base), true)
+})
+
+check('只有 idle 但没真的结束一轮（maintenance / 压缩）→ 不交接', () => {
+  assert.equal(shouldHandoff({ ...base, turnEnded: false }), false)
+})
+
+check('停运后不再驱动（指挥员挂死/超时）', () => {
+  assert.equal(shouldHandoff({ ...base, stopped: true }), false)
 })
 
 check('非全接管不交接', () => {
@@ -42,12 +50,14 @@ check('回复分类：允许结束 / 需澄清 / 其余算继续', () => {
   assert.equal(classifyReply(undefined), 'continue')
 })
 
-check('交给指挥员的汇报带轮次与正文', () => {
-  const text = renderReport({ round: 7, report: '改完了，测试全绿。' })
-  assert.match(text, /自动交接 #7/)
+check('交给指挥员的汇报带任务与正文，不带轮次', () => {
+  const text = renderReport({ task: '发布 dsh-commander 2.9.24', report: '改完了，测试全绿。' })
+  assert.match(text, /\[自动交接\]/)
+  assert.match(text, /当前任务：发布 dsh-commander 2\.9\.24/)
   assert.match(text, /改完了，测试全绿。/)
   assert.match(text, /继续 \/ 需澄清 \/ 允许结束/)
-  assert.equal(renderReport({ round: 1, report: '' }).includes('（本轮没有可见输出）'), true)
+  assert.doesNotMatch(text, /#\d+/, '不再用轮次编号')
+  assert.equal(renderReport({ report: '' }).includes('（本轮没有可见输出）'), true)
 })
 
 check('注入回主agent 的指令带原文与「不要问用户」边界', () => {
