@@ -30,7 +30,6 @@ import {
   DEFAULT_TAKEOVER,
   normalizeTakeover,
   nextTakeover,
-  onUserReturn,
   requiresConsultBeforeAsking,
   requiresGoalApproval,
   resolveTakeover,
@@ -41,7 +40,7 @@ import {
 import { createTranslator, localeKeyDiff } from './messages.js'
 
 /** 运行时版本标记：status 里显示，用来确认当前进程加载的是哪一版代码（HMR 是否生效）。 */
-const PLUGIN_VERSION = '2.9.21'
+const PLUGIN_VERSION = '2.9.22'
 
 /** 从 DSH 安装目录加载 schemastery；失败时插件仍可运行，只是 Plugin Manager 不显示 Config。 */
 function loadSchemaLib() {
@@ -871,10 +870,49 @@ export function apply(ctx, rawConfig = {}) {
    */
   function currentTakeover(agent) {
     const leadId = rootSessionIdOf(agent)
+    const record = takeoverOverrides.get(leadId)
     return resolveTakeover({
       hasCommander: commanderExists(agent),
-      override: takeoverOverrides.get(leadId)?.state,
+      override: record?.state,
+      overrideSource: record?.source,
     })
+  }
+
+  /**
+   * goal 动作门禁（`update_goal` 的 guard 与 `commander(action="goal")` 共用）。
+   *
+   * 两边必须走同一套判定：否则主agent 绕道 `commander(goal, complete)` 就能跳过批准，
+   * 门禁等于没有。
+   *
+   * @returns {string|undefined} 拒绝原因；undefined 表示放行
+   */
+  function goalGateError(agent, action, options = {}) {
+    if (config.enforceApproval !== true) return undefined
+    const header = agent.session?.header
+    if (header?.parentSession) return undefined
+    const leadId = rootSessionIdOf(agent)
+    if (!commanderStarted.has(leadId)) return undefined
+    // partial/full 才接管 goal 命令；observe/off 下不拦。
+    if (!requiresGoalApproval(currentTakeover(agent).state)) return undefined
+    const allowed = goalApprovals.get(leadId)
+    const phase = currentGoalPhase(agent)
+    if (action === 'complete') {
+      // 已经是 complete：插件/wait 可能已替 Lead 执行，幂等放行。
+      if (approvedSessions.has(leadId) || phase === 'complete') return undefined
+      return t('gate.needRelease')
+    }
+    if (action === 'resume') return t('gate.resumeByUser')
+    if (action === 'edit' || action === 'pause' || action === 'blocked') {
+      if (allowed?.has(action)) {
+        if (options.consume !== false) allowed.delete(action)
+        return undefined
+      }
+      // goal 已经处于目标态：说明 wait 处理批准时插件已执行过，不要再报“需要批准”。
+      const targetPhase = action === 'blocked' ? 'blocked' : action === 'pause' ? 'paused' : undefined
+      if (targetPhase !== undefined && phase === targetPhase) return undefined
+      return phase ? t('gate.needApprovalPhase', { action, phase }) : t('gate.needApproval', { action })
+    }
+    return undefined
   }
 
   // 放行门禁：写工具使当前放行失效；没有「允许结束」时不允许 complete goal。
@@ -891,45 +929,18 @@ export function apply(ctx, rawConfig = {}) {
       if (isWriteTool || shellMutates) {
         approvedSessions.delete(leadId)
       }
-      if (exec.name === 'ask_user_question' && !header?.parentSession) {
+      // 全接管下连 subagent 也不能直接问用户：它拿不到 commander 工具（只有根 agent 能咨询），
+      // 让它问就等于开了一个绕过指挥员的后门。
+      if (exec.name === 'ask_user_question') {
         // 只有「全接管」才强制先咨询：partial/observe/off 下问用户不该被拦。
         const takeover = currentTakeover(agent)
         if (requiresConsultBeforeAsking(takeover.state) && consultedSinceUser.get(leadId) !== true) {
           return t('gate.needCommander')
         }
       }
-      if (config.enforceApproval !== true) return undefined
       if (exec.name !== 'update_goal') return undefined
       const action = exec.arguments && typeof exec.arguments === 'object' ? exec.arguments.action : undefined
-      if (header?.parentSession) return undefined
-      if (!commanderStarted.has(leadId)) return undefined
-      // partial/full 才接管 goal 命令；observe/off 下不拦。
-      if (!requiresGoalApproval(currentTakeover(agent).state)) return undefined
-      const allowed = goalApprovals.get(leadId)
-      const phase = currentGoalPhase(agent)
-      if (action === 'complete') {
-        // 已经是 complete：插件/wait 可能已替 Lead 执行，幂等放行。
-        if (approvedSessions.has(leadId) || phase === 'complete') {
-          return undefined
-        }
-        return t('gate.needRelease')
-      }
-      if (action === 'resume') {
-        return t('gate.resumeByUser')
-      }
-      if (action === 'edit' || action === 'pause' || action === 'blocked') {
-        if (allowed?.has(action)) {
-          allowed.delete(action)
-          return undefined
-        }
-        // goal 已经处于目标态：说明 wait 处理批准时插件已执行过，不要再报“需要批准”。
-        const targetPhase = action === 'blocked' ? 'blocked' : action === 'pause' ? 'paused' : undefined
-        if (targetPhase !== undefined && phase === targetPhase) return undefined
-        return phase
-          ? t('gate.needApprovalPhase', { action, phase })
-          : t('gate.needApproval', { action })
-      }
-      return undefined
+      return goalGateError(agent, action)
     }),
   )
 
@@ -1128,19 +1139,13 @@ export function apply(ctx, rawConfig = {}) {
   ctx.on('session/event', (session, event) => {
     if (event?.type !== 'user/message') return
     if (!session?.header || session.header.parentSession) return
-    // 只认真实用户消息。合成消息（agent-message、subagent-settled 等）不是用户发言，
+    // 只认真实用户消息。合成消息（agent-message、runtime-context 等）不是用户发言，
     // 不该把门禁清零；source 缺失时按用户处理，避免门禁永远打不开。
     const kind = event.data?.source?.kind
     if (kind !== undefined && kind !== 'user') return
     consultedSinceUser.set(session.id, false)
-    // 你在打字就说明你在场：全接管自动降为部分接管，不必再挡你。
-    const current = takeoverOverrides.get(session.id)
-    if (current) {
-      const next = onUserReturn(current.state, current.source)
-      if (next.downgraded) {
-        takeoverOverrides.set(session.id, { state: next.state, source: next.source, at: Date.now() })
-      }
-    }
+    // 接管状态不再因为你发言而降级：硬控制权在用户手里（图标菜单），
+    // 你插话不代表你要放弃全接管。
   })
 
   // 记录 goal 生命周期变更来源：插件执行=agent，用户界面=user。
@@ -1528,7 +1533,7 @@ export function apply(ctx, rawConfig = {}) {
    * 不落盘是刻意的：接管状态属于「此刻这一轮」的选择，重启后按启动口径重新初始化，
    * 上一次的 full 不该在新进程里复活。需要长期偏好属于另一个话题。
    */
-  async function setTakeoverOverride(leadId, state) {
+  async function setTakeoverOverride(leadId, state, source = 'user') {
     if (!leadId) return
     if (state === undefined || state === null) {
       takeoverOverrides.delete(leadId)
@@ -1536,7 +1541,7 @@ export function apply(ctx, rawConfig = {}) {
     }
     const normalized = normalizeTakeover(state)
     if (!normalized) return
-    takeoverOverrides.set(leadId, { state: normalized, source: 'user', at: Date.now() })
+    takeoverOverrides.set(leadId, { state: normalized, source, at: Date.now() })
   }
 
   /** 接管状态一行（status / doctor 共用）。 */
@@ -2704,6 +2709,12 @@ export function apply(ctx, rawConfig = {}) {
         assertRootAgent(agent)
         const goalAction = typeof args.goalAction === 'string' ? args.goalAction : ''
         if (!goalAction) throw new Error('goal 动作需要 goalAction')
+        // 指挥员自己管 goal 不必自批；主agent 走这条路必须过同一套门禁，
+        // 否则 commander(goal, complete) 就是 update_goal 的后门。
+        if (!commanderIds.has(agent.id)) {
+          const gate = goalGateError(agent, goalAction)
+          if (gate !== undefined) return { action: 'goal', goalAction, text: gate }
+        }
         try {
           const result = await applyGoalOperation(agent, goalAction, {
             objective: args.objective,
@@ -2853,9 +2864,12 @@ export function apply(ctx, rawConfig = {}) {
         const { member, created } = await ensureCommanderTeammate(agent, cwd, docs, goal, signal)
         // 启动即初始化：新建的指挥员按「用户指定 > 默认 partial」进场；
         // 已存在但正处在 off（睡觉）的，这次 start 就是把它叫醒回到职责。
-        const requestedState = normalizeTakeover(args.state)
-        if (requestedState) await setTakeoverOverride(leadId, requestedState)
-        else if (created || stateBefore === 'off') await setTakeoverOverride(leadId, DEFAULT_TAKEOVER)
+        //
+        // state 参数只在**真的新建**时生效：否则主agent 可以 start(state="observe")
+        // 把自己从全接管里放出来，门禁就成了摆设。
+        const requestedState = created ? normalizeTakeover(args.state) : undefined
+        if (requestedState) await setTakeoverOverride(leadId, requestedState, 'init')
+        else if (created || stateBefore === 'off') await setTakeoverOverride(leadId, DEFAULT_TAKEOVER, 'init')
         // 启动也是一次状态落定：告诉主agent 现在按哪个宽度接管。
         announceTakeover(leadId, currentTakeover(agent).state)
         const modelNote = await applyAdvisorModel(member.id)

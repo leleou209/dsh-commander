@@ -2,6 +2,16 @@
 
 版本号与 `package.json` / `index.js` 里的 `PLUGIN_VERSION` 一致；`/commander status` 首行显示运行中的版本。
 
+## 2.9.22
+
+全接管的强制力补强，以及按用户决定去掉自动降级。
+
+- **去掉「你发言就降级」**：`full` 不再因为你发真实消息而自动降为 `partial`。理由是你随时能中断、有时确实要插话，而且现在有图标菜单——硬控制权在用户手里，不该由"说过话"推断"你在场所以不需要挡"。`onUserReturn` 整个删掉。
+- **堵 `commander(action="goal")` 后门**：它内部直接调 `goals.complete/pause/edit/block`，一行审批检查都没有，而调用者只要根 agent 就行——等于 `update_goal` 的批准门禁可以被绕开。现在抽出 `goalGateError()`，`update_goal` 的 guard 与 `commander(goal)` 共用同一套判定；指挥员自己管 goal 时豁免（`commanderIds`）。
+- **堵 `start(state=...)` 自我降级**：`state` 参数只在**真的新建**指挥员时生效。已存在的指挥员调用 `start(state="observe")` 不再改变接管状态。
+- **subagent 也纳入问用户门禁**：之前 `ask_user_question` 只拦根会话，派个子agent 去问就能绕开全接管。现在一并拦。
+- **修状态来源显示**：`resolveTakeover` 之前对任何覆盖值都硬编码 `source: 'user'`，所以状态行永远显示「你设定」。现在透传真实来源（`user` / `init`）。
+
 ## 2.9.21
 
 - **修 2.9.20 的通知送不到模型**：2.9.20 往会话里写的是 `developer/message`，日志里查得到，但宿主的 `projectToolUpdates` 在 `toolUpdate` 未定义时会把 developer 消息整批过滤掉（`withoutDeveloperMessages`），只有 tool-addition/tool-removal 那类才留。等于写进黑洞。

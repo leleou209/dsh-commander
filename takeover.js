@@ -25,7 +25,6 @@ export const TAKEOVER_LABELS = {
 export const TAKEOVER_SOURCES = {
   derived: '推导',
   user: '你设定',
-  auto: '自动降级',
   init: '启动默认',
 }
 
@@ -52,14 +51,18 @@ export function normalizeTakeover(value) {
  *
  * @param {object} input
  * @param {boolean} input.hasCommander 指挥员 teammate 是否存在
- * @param {string} [input.override] 用户显式设定（会被 normalizeTakeover 校验）
+ * @param {string} [input.override] 显式设定（会被 normalizeTakeover 校验）
+ * @param {string} [input.overrideSource] 这个设定从哪来（user / init），只用于展示
  * @returns {{state: string, source: string}}
  */
 export function resolveTakeover(input = {}) {
   const hasCommander = input.hasCommander === true
   if (!hasCommander) return { state: 'off', source: 'derived' }
   const override = normalizeTakeover(input.override)
-  if (override) return { state: override, source: 'user' }
+  if (override) {
+    const source = typeof input.overrideSource === 'string' && input.overrideSource.length > 0 ? input.overrideSource : 'user'
+    return { state: override, source }
+  }
   return { state: DEFAULT_TAKEOVER, source: 'derived' }
 }
 
@@ -76,15 +79,6 @@ export function requiresGoalApproval(state) {
 /** off 下这个动作是否被拒绝。 */
 export function blockedWhenOff(action) {
   return OFF_BLOCKED_ACTIONS.includes(action)
-}
-
-/**
- * 用户发来真实消息时的状态收敛：全接管自动降为部分接管（你在场，不必再挡）。
- * @returns {{state: string, source: string, downgraded: boolean}}
- */
-export function onUserReturn(state, source) {
-  if (state === 'full' && source === 'user') return { state: 'partial', source: 'auto', downgraded: true }
-  return { state, source, downgraded: false }
 }
 
 /** 下一个状态（供 `/commander takeover` 与旧版图标点击循环）。 */

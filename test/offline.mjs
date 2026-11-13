@@ -910,14 +910,14 @@ assert.equal(
   undefined,
   'synthetic message does not reset the gate',
 )
+// 2.9.22：真实用户消息不再降级——插话不等于放弃全接管，门禁仍然生效。
 emit('session/event', rootAgent.session, { type: 'user/message', data: { source: { kind: 'user' } } })
-assert.equal(
-  approvalGuard({ agent: rootAgent, name: 'ask_user_question', arguments: {} }),
-  undefined,
-  'a real user message downgrades full to partial, so asking is allowed again',
+assert.ok(
+  String(approvalGuard({ agent: rootAgent, name: 'ask_user_question', arguments: {} })).includes('全接管'),
+  'a real user message no longer downgrades full; asking stays blocked',
 )
 const afterReturn = await commander.execute({ action: 'status' }, exec(rootAgent))
-assert.ok(afterReturn.text.includes('部分接管'), 'status shows the downgraded takeover state')
+assert.ok(afterReturn.text.includes('全接管'), 'status still shows full takeover after the user speaks')
 
 // 12) interruption classification: abnormal resumes goal, user abort does not
 goalState.current = { ...goalState.current, phase: 'active', activation: 'disarmed', revision: 10 }

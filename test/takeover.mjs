@@ -7,7 +7,6 @@ import {
   DEFAULT_TAKEOVER,
   nextTakeover,
   normalizeTakeover,
-  onUserReturn,
   requiresConsultBeforeAsking,
   requiresGoalApproval,
   resolveTakeover,
@@ -97,16 +96,15 @@ check('goal 门禁只在 partial/full 生效', () => {
   )
 })
 
-check('用户回来时 full 自动降为 partial', () => {
-  const next = onUserReturn('full', 'user')
-  assert.equal(next.state, 'partial')
-  assert.equal(next.downgraded, true)
-  assert.equal(next.source, 'auto')
-})
-
-check('非全接管 / 非用户来源不降级', () => {
-  assert.equal(onUserReturn('partial', 'user').downgraded, false)
-  assert.equal(onUserReturn('full', 'derived').downgraded, false)
+check('覆盖值保留来源（用户设定 / 启动默认）', () => {
+  const byUser = resolveTakeover({ hasCommander: true, override: 'full', overrideSource: 'user' })
+  assert.equal(byUser.state, 'full')
+  assert.equal(byUser.source, 'user')
+  const byInit = resolveTakeover({ hasCommander: true, override: 'observe', overrideSource: 'init' })
+  assert.equal(byInit.state, 'observe')
+  assert.equal(byInit.source, 'init')
+  const noSource = resolveTakeover({ hasCommander: true, override: 'full' })
+  assert.equal(noSource.source, 'user', '缺省仍按用户设定')
 })
 
 check('循环顺序 off → observe → partial → full → off', () => {

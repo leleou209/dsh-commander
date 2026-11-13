@@ -2,7 +2,7 @@
 
 长线工作的「指挥员模式」：把一个**长期在线、可续接的 Agent Teams teammate** 装成「指挥员」（架构设计 + 督察指挥）。它读全部项目文件、跑只读 shell、可写文件但默认不动手，并通过 `send_message` 与 Lead 多轮对话。斜杠命令 `/commander`。
 
-> 当前版本 **2.9.21**，见 [CHANGELOG.md](CHANGELOG.md)。安装见 [INSTALL.md](INSTALL.md)，最短路径：
+> 当前版本 **2.9.22**，见 [CHANGELOG.md](CHANGELOG.md)。安装见 [INSTALL.md](INSTALL.md)，最短路径：
 >
 > ```sh
 > git clone https://github.com/leleou209/dsh-commander.git
@@ -183,8 +183,8 @@ checkCommands:
 
 - **只在启动指挥时初始化**：没有 teammate → `off`；有 teammate → 你显式选过的值，没选过就是 `partial`。接管宽度不再跟 goal 起落。
 - **不跨进程沿用**：接管状态只在内存里，重启后按启动口径重新初始化 —— 上一次的 `full` 不会在新进程里复活。`state.json` 里的 `takeover` 表已退役。
+- **不会因为你说过话而降级**（2.9.22 起）：`full` 保持到你手动改。你随时能中断、有时要插话，硬控制权在图标菜单上。
 - `off` 不是"解除指挥"：指挥员留在后台睡觉，`commander(action=say|wait)` 会被拒绝并回一句「用户已切换至不指挥状态，指挥agent已休息，请自行思考」。要恢复就切回 `observe` 及以上。
-- 你发来真实消息时 `full` 自动降为 `partial`（你在打字就说明你在场），`status` 会显示「部分接管（auto）」。
 - composer 工具行（模型选择器与发送键之间）有一个**皇冠图标**：灰色=不运行职责、浅灰=顾问、蓝色=部分、琥珀=全接管。点开菜单选状态；如果指挥员还没起来，选「不接管」及以上会**顺手把它启动起来**，指挥员就以你选的状态进场。
 
 > 这就是 2.9.0–2.9.11 那条「每轮问用户都要先过指挥员」的收窄：只有 `full` 才拦。`off`/`observe` 下问凭据、选文件这类只有用户能答的问题不再白烧两轮。
