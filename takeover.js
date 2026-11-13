@@ -81,8 +81,3 @@ export function blockedWhenOff(action) {
   return OFF_BLOCKED_ACTIONS.includes(action)
 }
 
-/** 下一个状态（供 `/commander takeover` 与旧版图标点击循环）。 */
-export function nextTakeover(state) {
-  const index = TAKEOVER_STATES.indexOf(normalizeTakeover(state) ?? 'off')
-  return TAKEOVER_STATES[(index + 1) % TAKEOVER_STATES.length]
-}

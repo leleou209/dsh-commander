@@ -2,7 +2,7 @@
 
 长线工作的「指挥员模式」：把一个**长期在线、可续接的 Agent Teams teammate** 装成「指挥员」（架构设计 + 督察指挥）。它读全部项目文件、跑只读 shell、可写文件但默认不动手，并通过 `send_message` 与 Lead 多轮对话。斜杠命令 `/commander`。
 
-> 当前版本 **2.9.34**，见 [CHANGELOG.md](CHANGELOG.md)。安装见 [INSTALL.md](INSTALL.md)，最短路径：
+> 当前版本 **2.9.35**，见 [CHANGELOG.md](CHANGELOG.md)。安装见 [INSTALL.md](INSTALL.md)，最短路径：
 >
 > ```sh
 > git clone https://github.com/leleou209/dsh-commander.git
@@ -170,6 +170,8 @@ checkCommands:
 - 分级前缀 `[信息]/[注意]/[失败]`；「已生效」与「失败」不混用；
 - `locale` 支持 `zh-CN` / `en`（`zh`、`zh-Hans` 归一化到 `zh-CN`）。
 
+自动交接的正文（`handoff.*`，2.9.35 起）也走同一套文案：`renderReport()` / `renderInstruction()` 接受注入的 `t()`，不传则用 `zh-CN`。**例外是契约令牌**——「决定：继续 / 需澄清 / 允许结束」是协议的一部分，不随语言变，`en` 文案里保留中文令牌并附英文解释。
+
 ## 接管状态（takeover，2.9.19）
 
 指挥员对主会话的接管程度有四个状态，决定**哪些门禁生效**：
@@ -313,6 +315,9 @@ node test/transcript-window.mjs
 - 轮次只统计有有效决策的回复；interrupt/失败不计入轮次。
 - 外部改代码会在 `update_goal complete` 前的异步校验中被拒绝，不需要先跑 `status`。
 - `doc/plan.md` / `doc/agent.md` 指挥员有写权限但默认不动手；需要自动留痕时可让它写，或由主agent维护。
+- 交接的 `handoffStates` 只按需创建，根会话结束后不主动回收（内存里每条几百字节，长期多会话会缓慢增长）。
+- `/commander/takeover` 这条本地 HTTP 路由没有鉴权：只监听 loopback，任何本机进程都能改接管状态（默认接受，因为它等价于用户点图标）。
+- 探针 `probe="send"` 会真的把指挥员唤醒一次，它那句回复没有消费者（探针不注入回主agent）。
 
 ## 许可证
 

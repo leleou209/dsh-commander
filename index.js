@@ -29,7 +29,6 @@ import {
   blockedWhenOff,
   DEFAULT_TAKEOVER,
   normalizeTakeover,
-  nextTakeover,
   requiresConsultBeforeAsking,
   requiresGoalApproval,
   resolveTakeover,
@@ -41,7 +40,7 @@ import { createTranslator, localeKeyDiff } from './messages.js'
 import { afterWait, classifyReply, commanderDead, HANDOFF_SOURCE, renderInstruction, renderReport, shouldHandoff } from './handoff.js'
 
 /** 运行时版本标记：status 里显示，用来确认当前进程加载的是哪一版代码（HMR 是否生效）。 */
-const PLUGIN_VERSION = '2.9.34'
+const PLUGIN_VERSION = '2.9.35'
 
 /** 从 DSH 安装目录加载 schemastery；失败时插件仍可运行，只是 Plugin Manager 不显示 Config。 */
 function loadSchemaLib() {
@@ -1695,7 +1694,7 @@ export function apply(ctx, rawConfig = {}) {
     const base = {
       role: 'user',
       id: `commander-handoff-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
-      content: [{ type: 'text', text: renderInstruction(text) }],
+      content: [{ type: 'text', text: renderInstruction(text, t) }],
     }
     try {
       agent.followup({ ...base, source: { ...HANDOFF_SOURCE, senderSessionId: commanderId } })
@@ -1815,7 +1814,7 @@ export function apply(ctx, rawConfig = {}) {
       const signal = new AbortController().signal
       const cwd = await resolveCwd(ctx, agent, signal).catch(() => process.cwd())
       const task = currentGoalObjective(agent)
-      const sent = await sendToCommander(agent, undefined, renderReport({ report, task, tools }), signal, cwd)
+      const sent = await sendToCommander(agent, undefined, renderReport({ report, task, tools, t }), signal, cwd)
       const result = await waitCommanderGuarded(agent, sent?.requestId)
       const outcome = afterWait({ kind: result?.kind, interrupted: state.interrupted, stopping: state.stopping })
       // 该清的 pending 一定要清：dead/timeout/让位都会留下脏记录。
@@ -3125,31 +3124,42 @@ export function apply(ctx, rawConfig = {}) {
         ]
         const probe = typeof args.probe === 'string' ? args.probe : 'checks'
         if (probe === 'send') {
-          try {
-            const probeSignal = new AbortController().signal
-            const cwd = await resolveCwd(ctx, agent, probeSignal)
-            const fromSeq = Math.max(state.lastSeq, lastTurnStartSeq(agent.session))
-            const report = lastAssistantText(agent.session, fromSeq, state.lastAt)
-            const tools = summarizeTools(agent.session, fromSeq)
-            const sent = await sendToCommander(
-              agent,
-              undefined,
-              renderReport({ report, task: currentGoalObjective(agent), tools }),
-              probeSignal,
-              cwd,
-            )
-            const pending = await loadPending(leadId).catch(() => undefined)
-            lines.push(
-              '',
-              '## 发送探针',
-              `- requestId：${sent?.requestId ?? '（无）'}`,
-              `- commanderId：${pending?.commanderId ?? '（无）'}`,
-              `- 汇报长度：${report.length} 字，工具 ${tools.length} 条`,
-            )
-            await clearPending(leadId).catch(() => {})
-            lines.push('- 已清除这次探针登记的 pending（不会留下脏记录）')
-          } catch (error) {
-            lines.push('', '## 发送探针失败', `- ${error && error.message ? error.message : error}`)
+          // 探针的三条安全约束（都是踩过的坑）：
+          //   1. 不覆盖真实请求——有活着的 pending 就跳过，别把用户正在等的请求顶掉；
+          //   2. 消息带 [探针] 前缀，指挥员据此只确认收到，不派活；
+          //   3. 登记完立刻清 pending，并**不注入**回主agent（探针不该开新一轮）。
+          const live = await loadPending(leadId).catch(() => undefined)
+          if (live && !isStalePending(live)) {
+            lines.push('', '## 发送探针', `- 跳过：已有未完成请求 ${live.requestId}，不覆盖真实请求`)
+          } else {
+            try {
+              const probeSignal = new AbortController().signal
+              const cwd = await resolveCwd(ctx, agent, probeSignal)
+              const fromSeq = Math.max(state.lastSeq, lastTurnStartSeq(agent.session))
+              const report = lastAssistantText(agent.session, fromSeq, state.lastAt)
+              const tools = summarizeTools(agent.session, fromSeq)
+              const body = renderReport({ report, task: currentGoalObjective(agent), tools, t })
+              const sent = await sendToCommander(
+                agent,
+                undefined,
+                `${t('handoff.probeTag')} ${t('handoff.probeNote')}\n\n${body}`,
+                probeSignal,
+                cwd,
+              )
+              const pending = await loadPending(leadId).catch(() => undefined)
+              lines.push(
+                '',
+                '## 发送探针',
+                `- requestId：${sent?.requestId ?? '（无）'}`,
+                `- commanderId：${pending?.commanderId ?? '（无）'}`,
+                `- 汇报长度：${report.length} 字，工具 ${tools.length} 条`,
+              )
+              await clearPending(leadId).catch(() => {})
+              lines.push('- 已清除这次探针登记的 pending（不会留下脏记录）')
+              lines.push('- 探针不注入回主agent：不会触发新一轮')
+            } catch (error) {
+              lines.push('', '## 发送探针失败', `- ${error && error.message ? error.message : error}`)
+            }
           }
         }
         return { action: 'handoff', text: lines.join('\n') }
@@ -3732,7 +3742,7 @@ export function apply(ctx, rawConfig = {}) {
           })
         }
         if (req.method === 'POST') {
-          const requested = payload?.state === 'next' ? nextTakeover(current.state) : payload?.state
+          const requested = payload?.state
           const normalized = normalizeTakeover(requested)
           if (!normalized) return sendJson(res, { error: 'invalid state', states: TAKEOVER_STATES, labels: stateLabels() }, 400)
           // 选了一个「运行职责」的状态、而指挥员还没起来 → 顺手把它启动起来。

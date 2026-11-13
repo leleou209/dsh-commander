@@ -3,6 +3,7 @@
  */
 import assert from 'node:assert/strict'
 import { afterWait, classifyReply, HANDOFF_SOURCE, renderInstruction, renderReport, shouldHandoff } from '../handoff.js'
+import { createTranslator } from '../messages.js'
 
 const checks = []
 const check = (name, fn) => checks.push({ name, fn })
@@ -114,6 +115,32 @@ check('注入回主agent 的指令带原文与「不要问用户」边界', () =
 check('交接消息的 source 是 agent-message relay', () => {
   assert.equal(HANDOFF_SOURCE.kind, 'agent-message')
   assert.equal(HANDOFF_SOURCE.form, 'relay')
+})
+
+check('交接文案跟随语言：en 下不出现中文正文，但契约令牌仍是中文', () => {
+  const en = createTranslator('en')
+  const report = renderReport({ report: 'done', task: 'ship 2.9.35', tools: ['✓ bash: ls'], t: en })
+  assert.match(report, /\[Handoff\]/)
+  assert.match(report, /Current task: ship 2\.9\.35/)
+  assert.match(report, /Tools this turn:/)
+  assert.doesNotMatch(report, /自动交接|当前任务|本轮工具/)
+  // 契约令牌不随语言变：指挥员永远用中文令牌回复。
+  assert.match(report, /允许结束/)
+  const instruction = renderInstruction('go on', en)
+  assert.match(instruction, /\[Commander instruction\]/)
+  assert.doesNotMatch(instruction, /指挥员指令|不要停下来问用户/)
+  assert.match(instruction, /go on/)
+})
+
+check('交接文案缺省是中文（不传 t 也能用）', () => {
+  assert.match(renderReport({ report: 'x' }), /\[自动交接\]/)
+  assert.match(renderInstruction('x'), /\[指挥员指令\]/)
+})
+
+check('探针文案带 [探针] 前缀且两语言都在', () => {
+  assert.match(createTranslator('zh-CN')('handoff.probeTag'), /探针/)
+  assert.match(createTranslator('en')('handoff.probeTag'), /probe/i)
+  assert.ok(createTranslator('en')('handoff.probeNote').length > 20)
 })
 
 let failed = 0

@@ -158,6 +158,21 @@ const zhCN = {
   'command.recordMissing': '缺少记录内容。',
   'command.failed': '指挥命令执行失败：{error}',
 
+  // ---- 自动交接（handoff）正文 ----
+  'handoff.reportHeader': '[自动交接] 主agent 已停下，以下是它本轮的最后输出。',
+  'handoff.task': '当前任务：{task}',
+  'handoff.noOutput': '（本轮没有可见输出）',
+  'handoff.toolsHeader': '本轮工具：',
+  'handoff.toolsMore': '…还有 {count} 条（未列）',
+  'handoff.askNext': '请给下一步指令：继续 / 需澄清 / 允许结束。',
+  'handoff.codeState': '代码状态：{codeState}',
+  'handoff.instructionHeader': '[指挥员指令] 以下是指挥员对上一轮的回复，按它继续：',
+  'handoff.emptyReply': '（指挥员回复为空）',
+  'handoff.instructionNote':
+    '注意：这是全接管下的自动交接，不要停下来问用户；进度以任务为单位汇报，不要用轮次计数。',
+  'handoff.probeTag': '[探针]',
+  'handoff.probeNote': '这是一次交接探针：请只确认收到并按正常格式回一句，不要据此派活或改状态。',
+
   // ---- 门禁 ----
   'gate.commanderReadOnly': '指挥员只能读取/侦察（可写文件但默认不动手）：工具 "{tool}" 被拒绝。请遵守契约，并在最终回答里给出「决定：继续/需澄清/允许结束」。',
 }
@@ -282,6 +297,20 @@ const en = {
   'command.unknownArg': 'Unrecognised argument "{raw}".',
   'command.recordMissing': 'Nothing to record.',
   'command.failed': 'Command failed: {error}',
+  'handoff.reportHeader': '[Handoff] The main agent stopped; below is its final output for this turn.',
+  'handoff.task': 'Current task: {task}',
+  'handoff.noOutput': '(no visible output this turn)',
+  'handoff.toolsHeader': 'Tools this turn:',
+  'handoff.toolsMore': '…plus {count} more (not listed)',
+  'handoff.askNext': 'Give the next instruction: 继续 / 需澄清 / 允许结束 (continue / need clarification / allow finishing).',
+  'handoff.codeState': 'Code state: {codeState}',
+  'handoff.instructionHeader': '[Commander instruction] The commander replied to the previous turn; continue accordingly:',
+  'handoff.emptyReply': '(the commander reply was empty)',
+  'handoff.instructionNote':
+    'Note: this is an automatic handoff under full takeover. Do not stop to ask the user; report progress per task, not per round count.',
+  'handoff.probeTag': '[probe]',
+  'handoff.probeNote': 'This is a handoff probe: just acknowledge receipt and reply in the normal format; do not dispatch work or change state based on it.',
+
   'gate.commanderReadOnly': 'The commander may only read/inspect (writing files is allowed but discouraged): tool "{tool}" was refused. Follow the contract and end with 决定：继续/需澄清/允许结束.',
 }
 

@@ -100,6 +100,39 @@ check('平铺格式（最老）也能读', () => {
   assert.equal(migrated.schema, STATE_SCHEMA)
 })
 
+check('schema 3 的退役 takeover 表：读得进但不进内存，写一次就消失', async () => {
+  const { file } = await tempState()
+  await fsp.writeFile(
+    file,
+    JSON.stringify({
+      schema: 3,
+      version: '2.9.34',
+      tables: {
+        // 退役表：还留在旧文件里，不该被复活。
+        takeover: { 'session-x': { state: 'full' } },
+        rounds: { root1: { count: 7 } },
+      },
+    }),
+  )
+  const store = await createStateStore({ path: file, pluginVersion: 'test' })
+  assert.equal(store.state.migratedFrom, 'schema 3', 'schema 变化必须记录迁移来源')
+  assert.equal(store.counts().takeover, undefined, 'takeover 不在 STATE_TABLES 里')
+  assert.equal(store.state.tables.takeover, undefined, '退役表不进内存')
+  assert.equal(store.counts().rounds, 1, '活着的表照常读进来')
+  await store.put('rounds', 'root1', { count: 8 })
+  const onDisk = JSON.parse(await fsp.readFile(file, 'utf8'))
+  assert.equal(onDisk.schema, STATE_SCHEMA)
+  assert.equal(onDisk.tables.takeover, undefined, '落盘后退役表自然消失')
+  assert.equal(onDisk.tables.rounds.root1.count, 8)
+})
+
+check('当前 schema 文件不算迁移（migratedFrom 为空）', async () => {
+  const { file } = await tempState()
+  await fsp.writeFile(file, JSON.stringify({ schema: STATE_SCHEMA, tables: { rounds: {} } }))
+  const store = await createStateStore({ path: file, pluginVersion: 'test' })
+  assert.equal(store.state.migratedFrom, undefined, '同版本不该报迁移')
+})
+
 check('修剪：每张表只保留最近 N 个会话', async () => {
   const { file } = await tempState()
   const store = await createStateStore({ path: file, pluginVersion: 'test', keepPerTable: 3 })

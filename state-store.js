@@ -10,8 +10,13 @@
 import fsp from 'node:fs/promises'
 import { dirname } from 'node:path'
 
-/** 当前 schema 版本（写入 `schema` 字段；`version` 保留为插件版本字符串）。 */
-export const STATE_SCHEMA = 3
+/** 当前 schema 版本（写入 `schema` 字段；`version` 保留为插件版本字符串）。
+ *
+ * schema 4（2.9.35）：`takeover` 表退役（接管状态改为只在内存里）。
+ * 不需要专门的迁移代码——`migrateState` 只拷贝 `STATE_TABLES` 里还活着的表，
+ * 旧文件里的 `takeover` 在下次写入时自然消失。
+ */
+export const STATE_SCHEMA = 4
 /**
  * 状态文件的四张表。
  *

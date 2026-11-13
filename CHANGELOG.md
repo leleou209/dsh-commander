@@ -2,6 +2,17 @@
 
 版本号与 `package.json` / `index.js` 里的 `PLUGIN_VERSION` 一致；`/commander status` 首行显示运行中的版本。
 
+## 2.9.35
+
+把 2.9.34 那轮审计里剩下的四项收尾：
+
+- **交接正文不再写死中文**。`renderReport()` / `renderInstruction()` 现在接受注入的 `t()`，`index.js` 传自己的翻译函数；`handoff.js` 缺省用 `createTranslator('zh-CN')`，所以单独调用和单测不受影响。`messages.js` 新增 `handoff.*` 共 12 个 key（zh/en 各一份）。**唯一的例外是契约令牌**——「决定：继续 / 需澄清 / 允许结束」不随语言变，换语言等于改协议，en 文案里保留中文令牌并附英文解释。
+- **探针不再可能污染真实状态**。`commander(action="handoff", probe="send")` 三条硬约束：（1）已有活着的 pending 就直接跳过，不顶掉用户正在等的请求；（2）消息带 `[探针]` 前缀 + 一句「请只确认收到，不要据此派活」；（3）登记完立刻清 pending，且**不注入**回主agent（探针不该开新一轮）。输出里明确写出这三件事的结果。
+- **状态文件 schema 3 → 4**，`takeover` 表正式退役（2.9.19 起接管状态就只在内存里）。`migrateState()` 只拷贝 `STATE_TABLES` 里还活着的表，所以旧文件里的 `takeover` 在下次写入时自然消失，不需要专门迁移代码；`test/state-store.mjs` 加了 2 项断言（退役表读得进但不进内存、落盘后消失；同版本不报迁移）。
+- **删掉 `nextTakeover()`**：图标菜单和斜杠命令都改成直接选状态，循环切换的辅助函数已无调用方，留着只会误导。
+
+测试：offline / takeover(12) / handoff(19) / regressions(15) / state-store(12) / transcript-window 全绿。
+
 ## 2.9.34
 
 以自己为使用案例做了一轮审计，修掉四个真 bug：

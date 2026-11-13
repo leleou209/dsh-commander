@@ -5,7 +5,6 @@ import assert from 'node:assert/strict'
 import {
   blockedWhenOff,
   DEFAULT_TAKEOVER,
-  nextTakeover,
   normalizeTakeover,
   requiresConsultBeforeAsking,
   requiresGoalApproval,
@@ -105,14 +104,6 @@ check('覆盖值保留来源（用户设定 / 启动默认）', () => {
   assert.equal(byInit.source, 'init')
   const noSource = resolveTakeover({ hasCommander: true, override: 'full' })
   assert.equal(noSource.source, 'user', '缺省仍按用户设定')
-})
-
-check('循环顺序 off → observe → partial → full → off', () => {
-  assert.equal(nextTakeover('off'), 'observe')
-  assert.equal(nextTakeover('observe'), 'partial')
-  assert.equal(nextTakeover('partial'), 'full')
-  assert.equal(nextTakeover('full'), 'off')
-  assert.equal(nextTakeover('nonsense'), 'observe', '非法值按 off 起算')
 })
 
 check('normalizeTakeover 大小写/空白容错', () => {

@@ -13,6 +13,8 @@
  *   - 中断就是中断，不调整接管状态——用户随时可以插话或单独停掉某一方。
  */
 
+import { createTranslator } from './messages.js'
+
 /** 注入回主agent 的消息用的 source：语义就是"另一个 agent 转来的话"。 */
 export const HANDOFF_SOURCE = { kind: 'agent-message', form: 'relay' }
 
@@ -50,34 +52,51 @@ export function classifyReply(text) {
   return 'continue'
 }
 
+/**
+ * 交接文案的取词函数。
+ *
+ * 交接正文是**给模型看的话**，不是界面文案，但它同样要跟随插件语言：用户把
+ * locale 切成 en 时，不该继续收到中文提示。这里默认 zh-CN，宿主传自己的 t 进来。
+ *
+ * 注意：`classifyReply` 里的「允许结束 / 需澄清」是**契约令牌**，不随语言变——
+ * 指挥员的回复必须带这两个中文词，换语言等于改协议。
+ */
+const defaultT = createTranslator('zh-CN')
+
+function pickT(t) {
+  return typeof t === 'function' ? t : defaultT
+}
+
 /** 交给指挥员的那段话：本轮输出 + 当前任务 + 工具摘要 + 代码状态。 */
 export function renderReport(input = {}) {
+  const t = pickT(input.t)
   const report = String(input.report ?? '').trim()
   const task = String(input.task ?? '').trim()
   const codeState = input.codeState ? String(input.codeState) : ''
   const tools = Array.isArray(input.tools) ? input.tools.filter((row) => String(row ?? '').trim().length > 0) : []
-  const lines = ['[自动交接] 主agent 已停下，以下是它本轮的最后输出。', '']
-  if (task.length > 0) lines.push(`当前任务：${task}`, '')
-  lines.push(report.length > 0 ? report : '（本轮没有可见输出）')
+  const lines = [t('handoff.reportHeader'), '']
+  if (task.length > 0) lines.push(t('handoff.task', { task }), '')
+  lines.push(report.length > 0 ? report : t('handoff.noOutput'))
   if (tools.length > 0) {
-    lines.push('', '本轮工具：')
+    lines.push('', t('handoff.toolsHeader'))
     for (const row of tools.slice(0, 16)) lines.push(`- ${row}`)
-    if (tools.length > 16) lines.push(`- …还有 ${tools.length - 16} 条（未列）`)
+    if (tools.length > 16) lines.push(`- ${t('handoff.toolsMore', { count: tools.length - 16 })}`)
   }
-  lines.push('', '请给下一步指令：继续 / 需澄清 / 允许结束。')
-  if (codeState.length > 0) lines.push('', `代码状态：${codeState}`)
+  lines.push('', t('handoff.askNext'))
+  if (codeState.length > 0) lines.push('', t('handoff.codeState', { codeState }))
   return lines.join('\n')
 }
 
 /** 注入回主agent 的那段话：指挥员的原始指令 + 一句边界说明。 */
-export function renderInstruction(reply) {
+export function renderInstruction(reply, t) {
+  const translate = pickT(t)
   const text = String(reply ?? '').trim()
   return [
-    '[指挥员指令] 以下是指挥员对上一轮的回复，按它继续：',
+    translate('handoff.instructionHeader'),
     '',
-    text.length > 0 ? text : '（指挥员回复为空）',
+    text.length > 0 ? text : translate('handoff.emptyReply'),
     '',
-    '注意：这是全接管下的自动交接，不要停下来问用户；进度以任务为单位汇报，不要用轮次计数。',
+    translate('handoff.instructionNote'),
   ].join('\n')
 }
 
