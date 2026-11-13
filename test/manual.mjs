@@ -82,10 +82,23 @@ check('工具说明不超过 800 字符，且指路了 help', () => {
     `工具说明 ${COMMANDER_TOOL_DESCRIPTION.length} 字符，超过 800 预算`,
   )
   assert.match(COMMANDER_TOOL_DESCRIPTION, /commander\(action="help"\)/)
-  // 三条硬门禁必须在常驻说明里（不能只写在说明书里）
+  // 三条硬门禁必须在常驻说明里（不能只写在说明书里），且令牌保持中文原样
   assert.match(COMMANDER_TOOL_DESCRIPTION, /允许结束/)
   assert.match(COMMANDER_TOOL_DESCRIPTION, /批准：goal/)
-  assert.match(COMMANDER_TOOL_DESCRIPTION, /全接管/)
+  assert.match(COMMANDER_TOOL_DESCRIPTION, /full takeover/)
+})
+
+check('说明书是英文单语，但契约令牌保持中文原样', () => {
+  const all = MANUAL_TOPICS.map((topic) => `${topic.title}\n${topic.when}\n${topic.body}`).join('\n')
+  const cjk = [...all].filter((ch) => {
+    const code = ch.codePointAt(0)
+    return (code >= 0x4e00 && code <= 0x9fff) || (code >= 0x3000 && code <= 0x303f) || (code >= 0xff00 && code <= 0xffef)
+  })
+  // 中文只应出现在契约令牌里（决定/批准/允许结束/请求/适用状态/继续/需澄清），正文必须是英文。
+  assert.ok(cjk.length < 120, `正文里还有 ${cjk.length} 个中文字符，说明没有全量英文化`)
+  for (const token of ['决定：', '批准：goal', '适用状态：', '允许结束', '需澄清']) {
+    assert.ok(all.includes(token), `契约令牌丢了：${token}`)
+  }
 })
 
 check('说明书不含密钥与本机绝对路径', () => {

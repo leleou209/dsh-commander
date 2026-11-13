@@ -78,9 +78,9 @@ node test/transcript-window.mjs
 插件给主agent 的是一个 `commander` 工具。**先让它读说明书**，否则它只会看到一段约 380 字符的摘要：
 
 ```text
-commander(action="help")                        # 索引：9 个分段 + 什么时候该看
-commander(action="help", topic="overview")      # 它是什么、不是什么
-commander(action="help", topic="loop")          # 一轮怎么走：say → wait → 分流
+commander(action="help")                        # index: 9 sections + when to read each
+commander(action="help", topic="overview")      # what it is / is not
+commander(action="help", topic="loop")          # one round: say -> wait -> branch
 ```
 
 完整文本也随包提供：[AGENT-MANUAL.md](AGENT-MANUAL.md)（由 `manual.js` 生成，测试保证一致）。人读一遍这四段就够上手：`overview` / `states` / `loop` / `tokens`。

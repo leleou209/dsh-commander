@@ -2,7 +2,7 @@
 
 长线工作的「指挥员模式」：把一个**长期在线、可续接的 Agent Teams teammate** 装成「指挥员」（架构设计 + 督察指挥）。它读全部项目文件、跑只读 shell、可写文件但默认不动手，并通过 `send_message` 与 Lead 多轮对话。斜杠命令 `/commander`。
 
-> 当前版本 **2.9.36**，见 [CHANGELOG.md](CHANGELOG.md)。安装见 [INSTALL.md](INSTALL.md)，最短路径：
+> 当前版本 **2.9.37**，见 [CHANGELOG.md](CHANGELOG.md)。安装见 [INSTALL.md](INSTALL.md)，最短路径：
 >
 > ```sh
 > git clone https://github.com/leleou209/dsh-commander.git
@@ -125,17 +125,18 @@
 
 把主agent完成的实质行为倒序写入 `doc/history.md`，供指挥员下一轮参考。
 
-## 主agent 说明书（2.9.36）
+## 主agent 说明书（2.9.36 起，2.9.37 英文化）
 
-工具说明只保留「是什么 + 动作清单 + 硬门禁 + 指路」（约 380 字符），**协议细节在说明书里**：
+工具说明只保留「是什么 + 动作清单 + 硬门禁 + 指路」（**621 字符**），**协议细节在说明书里**：
 
 - `commander(action="help")` → 索引（9 个分段，每段一行 + 「什么时候该看」）
 - `commander(action="help", topic="loop")` → 该段正文
 
 分段：`overview`（是什么/不是什么）、`states`（接管四态各自拦什么）、`loop`（say → wait → 分流）、`tokens`（决定令牌/批准行/CODE_STATE 回显）、`goal`（goal 门禁三条硬规则）、`full`（换驾驶员：自动交接）、`report`（汇报五要素）、`troubleshoot`（doctor/checks/handoff 探针，先探针别猜）、`antipatterns`（都真踩过的坑）。
 
-单一事实源是 `manual.js`；[AGENT-MANUAL.md](AGENT-MANUAL.md) 由它生成，`test/manual.mjs` 逐字节比对防漂移。说明书是**中文单语**：契约令牌（决定/批准/允许结束）本身就是中文，翻译等于改协议。
+单一事实源是 `manual.js`；[AGENT-MANUAL.md](AGENT-MANUAL.md) 由它生成，`test/manual.mjs` 逐字节比对防漂移。
 
+**说明书是英文单语**（2.9.37 起）：同样内容英文比中文省约 8% token，常驻的工具说明省约一半。**契约令牌仍是中文原样**（`决定：继续/需澄清/允许结束`、`批准：goal <动作>`、`适用状态：CS-…`）——它们是 `classifyReply()` 匹配的协议字面量，翻译等于改协议；说明书里对每个令牌给了英文解释。
 ## 四份协作文档（`doc/`）
 
 - `doc/suggest.md`：**仅用户**编写的建议板；指挥员每轮优先读它。插件只在缺失时建骨架。
@@ -331,7 +332,7 @@ node test/transcript-window.mjs
 - 外部改代码会在 `update_goal complete` 前的异步校验中被拒绝，不需要先跑 `status`。
 - `doc/plan.md` / `doc/agent.md` 指挥员有写权限但默认不动手；需要自动留痕时可让它写，或由主agent维护。
 - 交接的 `handoffStates` 只按需创建，根会话结束后不主动回收（内存里每条几百字节，长期多会话会缓慢增长）。
-- 说明书是**中文单语**：`locale: en` 的用户也会看到中文说明书（契约令牌本身是中文，翻译等于改协议）；有真实英文需求再加 en。
+- 说明书是**英文单语**（2.9.37 起）：中文用户的 agent 也会读到英文说明书（省 token 优先）；契约令牌仍是中文，不受影响。
 - `/commander/takeover` 这条本地 HTTP 路由没有鉴权：只监听 loopback，任何本机进程都能改接管状态（默认接受，因为它等价于用户点图标）。
 - 探针 `probe="send"` 会真的把指挥员唤醒一次，它那句回复没有消费者（探针不注入回主agent）。
 

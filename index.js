@@ -41,7 +41,7 @@ import { afterWait, classifyReply, commanderDead, HANDOFF_SOURCE, renderInstruct
 import { COMMANDER_TOOL_DESCRIPTION, manualTopicIds, renderManualIndex, renderManualTopic } from './manual.js'
 
 /** 运行时版本标记：status 里显示，用来确认当前进程加载的是哪一版代码（HMR 是否生效）。 */
-const PLUGIN_VERSION = '2.9.36'
+const PLUGIN_VERSION = '2.9.37'
 
 /** 从 DSH 安装目录加载 schemastery；失败时插件仍可运行，只是 Plugin Manager 不显示 Config。 */
 function loadSchemaLib() {
@@ -2844,7 +2844,7 @@ export function apply(ctx, rawConfig = {}) {
       out.push(...suggestions.map((item) => `- 下一步：${item}`))
     }
     if (fixes.length > 0) out.push(`- ${t('doctor.fix.applied', { items: fixes.join('，') })}`)
-    out.push('', '首次使用或不确定流程：`commander(action="help")` 取说明书。')
+    out.push('', 'First time, or unsure of the flow: `commander(action="help")` for the manual.')
     return { text: out.join('\n'), fails, warns }
   }
 
@@ -3176,7 +3176,7 @@ export function apply(ctx, rawConfig = {}) {
           return {
             action: 'help',
             text: renderManualIndex({
-              header: `## 没有名为 "${requested}" 的说明书分段（可用：${manualTopicIds().join('、')}）`,
+              header: `## No manual section named "${requested}" (available: ${manualTopicIds().join(', ')})`,
             }),
           }
         }
@@ -3376,7 +3376,7 @@ export function apply(ctx, rawConfig = {}) {
           `- 文档：${DOC_FILES.map((key) => `doc/${key}.md`).join('、')}`,
           '',
           `用 \`commander(action=say, message="...")\` 发起咨询，再 \`commander(action=wait)\` 无超时等待；也可直接 \`send_message({ target: "${member.name}", ... })\`（不登记 pending）。`,
-          `第一次用请先 \`commander(action="help")\` 取说明书（索引 → 按 topic 取正文）。`,
+          `First time? Run \`commander(action="help")\` for the manual index, then a topic.`,
         ]
         return { action: 'start', text: lines.join('\n'), target: member.name, docs: [], goal: goalMessage }
       }

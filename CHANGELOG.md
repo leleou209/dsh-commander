@@ -2,6 +2,17 @@
 
 版本号与 `package.json` / `index.js` 里的 `PLUGIN_VERSION` 一致；`/commander status` 首行显示运行中的版本。
 
+## 2.9.37
+
+用户：「改成英文吧，英文省token」。说明书整份英文化，契约令牌不动。
+
+- **`manual.js` 全量英文**：9 个 topic 正文、索引的 `when` 行、`COMMANDER_TOOL_DESCRIPTION`。工具说明从 382 字符（中文）变成 **621 字符（英文）**，但按 token 估算从 ~345 降到 ~178（常驻成本约省一半）；整份说明书 ~2853 → ~2628 token（约省 8%）。
+- **契约令牌保持中文原样**：`决定：继续 / 需澄清 / 允许结束`、`批准：goal <动作>`、`请求：…`、`适用状态：CS-…`。它们是 `classifyReply()` 匹配的协议字面量，翻译等于改协议；`tokens` 段对每个令牌给了英文解释（continue / need clarification / allow finishing）。
+- **测试**：`test/manual.mjs` 8 → 9 项，新增「说明书是英文单语但令牌保持中文」（正文中文字符 < 120 且五个令牌都在），并把「三条硬门禁在常驻说明里」的断言从中文词改成英文词。
+- **`AGENT-MANUAL.md`** 重新生成（9838B）；`start` / `doctor` 的指路句也改成英文，与说明书语言一致。
+
+门禁措辞自检：`complete a goal only after the commander explicitly says 允许结束` / `goal complete/edit/pause/blocked need 批准：goal <action>` / `under full takeover ask the user only after say + wait`——三条与中文版一一对应，未弱化、未歧义。
+
 ## 2.9.36
 
 用户反馈：「使用插件的 agent 不知道使用手册」。原来主agent 能看到的只有一段约 1.5k 字的工具说明，四态语义、交接循环、门禁细节、踩过的坑全塞不进去——新装的 agent 只能靠猜。
