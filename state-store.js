@@ -12,8 +12,13 @@ import { dirname } from 'node:path'
 
 /** 当前 schema 版本（写入 `schema` 字段；`version` 保留为插件版本字符串）。 */
 export const STATE_SCHEMA = 3
-/** 状态文件的四张表。 */
-export const STATE_TABLES = ['pending', 'interruptions', 'approvals', 'rounds', 'takeover']
+/**
+ * 状态文件的四张表。
+ *
+ * `takeover` 已于 2.9.19 退役：接管状态改成只在内存里（启动时初始化，不跨进程沿用）。
+ * 旧文件里的这张表会在下次写入时自然消失，不需要迁移。
+ */
+export const STATE_TABLES = ['pending', 'interruptions', 'approvals', 'rounds']
 
 const DEFAULT_MAX_BYTES = 256 * 1024
 const DEFAULT_KEEP_PER_TABLE = 200

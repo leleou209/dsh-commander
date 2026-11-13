@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-commander",
-  "version": "2.9.18",
+  "version": "2.9.19",
   "private": true,
   "type": "module",
   "description": "指挥员模式（dsh-commander）：一个长期在线、可续接的 Agent Teams teammate「指挥员」，负责架构设计、功能铺展与督察验收；可读全部文件、跑只读 shell 与受控检查命令、可写 doc 但默认不动手。",

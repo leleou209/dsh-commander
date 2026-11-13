@@ -8,6 +8,9 @@
  *   - goal 的 edit/pause/blocked 需要「批准：goal <动作>」；paused goal 只能由用户恢复；
  *   - 异常中断恢复时自动 rearm 原本 active 的 goal，用户主动中断不恢复。
  *
+ * 接管状态（takeover）四态 off/observe/partial/full 决定哪些门禁生效：启动时初始化
+ * （默认 partial），之后由用户在 composer 图标菜单里显式切换；只在内存里，不跨进程沿用。
+ *
  * 指挥员工具面通过 tools.restrict + guard 收紧：读全盘、只读 shell、写仅限 doc/；
  * 该 teammate 是长期在线的指挥循环，不替代工程组。
  *
@@ -23,6 +26,8 @@ import { COMMANDER_CONTRACT, parseCodeState, parseDecision, parseGoalApprovals, 
 import { computeCodeState, describeGitHead } from './code-state.js'
 import { createStateStore, STATE_TABLES } from './state-store.js'
 import {
+  blockedWhenOff,
+  DEFAULT_TAKEOVER,
   normalizeTakeover,
   nextTakeover,
   onUserReturn,
@@ -36,7 +41,7 @@ import {
 import { createTranslator, localeKeyDiff } from './messages.js'
 
 /** 运行时版本标记：status 里显示，用来确认当前进程加载的是哪一版代码（HMR 是否生效）。 */
-const PLUGIN_VERSION = '2.9.18'
+const PLUGIN_VERSION = '2.9.19'
 
 /** 从 DSH 安装目录加载 schemastery；失败时插件仍可运行，只是 Plugin Manager 不显示 Config。 */
 function loadSchemaLib() {
@@ -786,7 +791,7 @@ export function apply(ctx, rawConfig = {}) {
   const approvedSessions = new Map()
   /** 当前用户回合内是否已经咨询过指挥员。 */
   const consultedSinceUser = new Map()
-  /** 每个 Lead 会话的用户显式接管状态覆盖（持久化在 state.json 的 takeover 表）。 */
+  /** 每个 Lead 会话的接管状态（只在内存里：启动时初始化，不跨进程沿用）。 */
   const takeoverOverrides = new Map()
   /** 每个 Lead 会话由指挥员批准的 goal 变更动作（一次性）。 */
   const goalApprovals = new Map()
@@ -861,21 +866,13 @@ export function apply(ctx, rawConfig = {}) {
   /**
    * 当前接管状态（同步读内存缓存，门禁可以直接用）。
    *
-   * 状态默认推导（无指挥员=off、有 goal=partial、否则 observe），
-   * 用户显式 `/commander takeover <状态>` 后以覆盖值为准。
+   * 没有指挥员=off；有指挥员=显式设定值，没设过就是启动默认值 partial。
+   * 不再看 goal：接管宽度由你显式选择，不跟着 goal 起落。
    */
   function currentTakeover(agent) {
     const leadId = rootSessionIdOf(agent)
-    const goal = (() => {
-      try {
-        return ctx.get('goals')?.get?.(agent)
-      } catch {
-        return undefined
-      }
-    })()
     return resolveTakeover({
       hasCommander: commanderExists(agent),
-      goalActive: goal?.phase === 'active',
       override: takeoverOverrides.get(leadId)?.state,
     })
   }
@@ -1142,9 +1139,6 @@ export function apply(ctx, rawConfig = {}) {
       const next = onUserReturn(current.state, current.source)
       if (next.downgraded) {
         takeoverOverrides.set(session.id, { state: next.state, source: next.source, at: Date.now() })
-        pendingUnit()
-          .then((unit) => unit.putRecord('takeover', session.id, takeoverOverrides.get(session.id)))
-          .catch(() => {})
       }
     }
   })
@@ -1528,32 +1522,21 @@ export function apply(ctx, rawConfig = {}) {
     return { store, snapshot, counts: store.counts(), mode }
   }
 
-  /** 启动时把持久化的接管覆盖读进内存（门禁是同步的，必须走缓存）。 */
-  async function hydrateTakeover() {
-    try {
-      const store = await stateStore()
-      for (const [leadId, record] of Object.entries(store.table('takeover') ?? {})) {
-        const state = normalizeTakeover(record?.state)
-        if (state) takeoverOverrides.set(leadId, { state, source: record.source ?? 'user', at: record.at })
-      }
-    } catch {
-      // 读不到就用推导值
-    }
-  }
-
-  /** 设置/清除某个 Lead 的接管覆盖（同时落盘）。 */
+  /**
+   * 设置/清除某个 Lead 的接管覆盖（只在本次进程内有效）。
+   *
+   * 不落盘是刻意的：接管状态属于「此刻这一轮」的选择，重启后按启动口径重新初始化，
+   * 上一次的 full 不该在新进程里复活。需要长期偏好属于另一个话题。
+   */
   async function setTakeoverOverride(leadId, state) {
     if (!leadId) return
     if (state === undefined || state === null) {
       takeoverOverrides.delete(leadId)
-      await pendingUnit().then((unit) => unit.deleteRecord('takeover', leadId)).catch(() => {})
       return
     }
     const normalized = normalizeTakeover(state)
     if (!normalized) return
-    const record = { state: normalized, source: 'user', at: Date.now() }
-    takeoverOverrides.set(leadId, record)
-    await pendingUnit().then((unit) => unit.putRecord('takeover', leadId, record)).catch(() => {})
+    takeoverOverrides.set(leadId, { state: normalized, source: 'user', at: Date.now() })
   }
 
   /** 接管状态一行（status / doctor 共用）。 */
@@ -2614,6 +2597,12 @@ export function apply(ctx, rawConfig = {}) {
           type: 'string',
           description: 'say 要发给指挥员的完整消息（问题、上下文、需要它判断的取舍）。',
         },
+        state: {
+          type: 'string',
+          enum: ['off', 'observe', 'partial', 'full'],
+          description:
+            'start 可选的接管状态：默认 partial（部分接管）；用户说「当顾问」用 observe，说「全接管」用 full。',
+        },
         requestId: {
           type: 'string',
           description: 'wait/cancel 可选的请求 id；省略时使用当前 pending 请求。',
@@ -2710,6 +2699,10 @@ export function apply(ctx, rawConfig = {}) {
       if (action === 'list') {
         const roster = await commanderRoster(agent, signal)
         return { action: 'list', text: roster.text }
+      }
+      // off（不运行指挥职责）：指挥员在后台睡觉，叫它没用——直接把话回给主agent，让它自己干。
+      if (blockedWhenOff(action) && commanderExists(agent) && currentTakeover(agent).state === 'off') {
+        return { action, text: t('takeover.offRefusal') }
       }
       assertRootAgent(agent)
       await ensureDocs(cwd, config)
@@ -2816,6 +2809,8 @@ export function apply(ctx, rawConfig = {}) {
         return payload
       }
       if (action === 'start') {
+        const leadId = rootSessionIdOf(agent)
+        const stateBefore = currentTakeover(agent).state
         const goalMessage = await applyGoalPolicy(agent)
         const docs = await readDocsState(cwd, config)
         let goal
@@ -2825,6 +2820,11 @@ export function apply(ctx, rawConfig = {}) {
           goal = undefined
         }
         const { member, created } = await ensureCommanderTeammate(agent, cwd, docs, goal, signal)
+        // 启动即初始化：新建的指挥员按「用户指定 > 默认 partial」进场；
+        // 已存在但正处在 off（睡觉）的，这次 start 就是把它叫醒回到职责。
+        const requestedState = normalizeTakeover(args.state)
+        if (requestedState) await setTakeoverOverride(leadId, requestedState)
+        else if (created || stateBefore === 'off') await setTakeoverOverride(leadId, DEFAULT_TAKEOVER)
         const modelNote = await applyAdvisorModel(member.id)
         const titleNote = await applyCommanderTitle(member.id)
         const lines = [
@@ -2840,6 +2840,7 @@ export function apply(ctx, rawConfig = {}) {
                 : t('start.modelFallback')
           }`,
           `- goal：${goalMessage || t('goal.kept')}`,
+          `- ${t('label.takeover')}：${takeoverLine(agent)}`,
           `- 文档：${DOC_FILES.map((key) => `doc/${key}.md`).join('、')}`,
           '',
           `用 \`commander(action=say, message="...")\` 发起咨询，再 \`commander(action=wait)\` 无超时等待；也可直接 \`send_message({ target: "${member.name}", ... })\`（不登记 pending）。`,
@@ -3052,9 +3053,9 @@ export function apply(ctx, rawConfig = {}) {
             text:
               `接管状态：${takeoverLine(agent)}\n` +
               `可选：${TAKEOVER_STATES.join(' / ')}；用 \`/${config.commandName} takeover <状态>\` 切换。\n` +
-              `- off 无指挥：任何门禁都不生效\n` +
+              `- off 不运行指挥职责：指挥员休息，commander say/wait 直接拒绝，门禁全关\n` +
               `- observe 不接管：指挥员只当顾问\n` +
-              `- partial 部分接管：goal 命令与放行归指挥员\n` +
+              `- partial 部分接管：goal 命令与放行归指挥员（启动默认）\n` +
               `- full 全接管：连问用户都要先过指挥员（你不在场时用）`,
           }
         }
@@ -3146,11 +3147,11 @@ export function apply(ctx, rawConfig = {}) {
     }
   })
 
-  // 接管状态：启动时把持久化覆盖读进内存；再挂一个只读/可写的 HTTP 路由给客户端图标。
+  // 接管状态：只在内存里（启动时按口径初始化，不沿用上次进程的旧值）；再挂一个
+  // 只读/可写的 HTTP 路由给客户端图标。
   //
   // 用 handler 而不是 resource：宿主的 resource 路由只接受 GET/HEAD，POST 会被直接
   // 405 掉，而图标点击需要写状态。
-  hydrateTakeover().catch(() => {})
   // 必须用 ctx.inject 等 webServer 就位：直接 ctx.get 时插件加载顺序不同就会拿到
   // undefined，然后 return 掉再也不注册（vps 上就是这么 404 的）。
   ctx.inject(['webServer'], (webCtx) => {
@@ -3178,6 +3179,18 @@ export function apply(ctx, rawConfig = {}) {
         req.on('end', () => resolveBody(data))
         req.on('error', () => resolveBody(''))
       })
+    /** 从图标点进来的启动：只负责把指挥员拉起来，不碰 goal 策略。 */
+    const startCommanderFromUi = async (agent) => {
+      const cwd = await resolveCwd(ctx, agent, undefined)
+      const docs = await readDocsState(cwd, config)
+      let goal
+      try {
+        goal = ctx.get('goals')?.get?.(agent)
+      } catch {
+        goal = undefined
+      }
+      return ensureCommanderTeammate(agent, cwd, docs, goal, undefined)
+    }
     return webServer.register({
       kind: 'prefix',
       path: '/commander/takeover',
@@ -3198,9 +3211,10 @@ export function apply(ctx, rawConfig = {}) {
         }
         if (!sessionId) return sendJson(res, { error: 'sessionId required' }, 400)
         const agent = ctx.get('agents')?.get?.(sessionId)
+        const hasCommander = agent ? commanderExists(agent) : false
         const current = agent
           ? currentTakeover(agent)
-          : resolveTakeover({ hasCommander: false, goalActive: false, override: takeoverOverrides.get(sessionId)?.state })
+          : resolveTakeover({ hasCommander: false, override: takeoverOverrides.get(sessionId)?.state })
         if (req.method === 'GET' || req.method === 'HEAD') {
           return sendJson(res, {
             state: current.state,
@@ -3208,12 +3222,37 @@ export function apply(ctx, rawConfig = {}) {
             label: TAKEOVER_LABELS[current.state] ?? current.state,
             states: TAKEOVER_STATES,
             labels: stateLabels(),
+            hasCommander,
           })
         }
         if (req.method === 'POST') {
           const requested = payload?.state === 'next' ? nextTakeover(current.state) : payload?.state
           const normalized = normalizeTakeover(requested)
           if (!normalized) return sendJson(res, { error: 'invalid state', states: TAKEOVER_STATES, labels: stateLabels() }, 400)
+          // 选了一个「运行职责」的状态、而指挥员还没起来 → 顺手把它启动起来。
+          // 这正是菜单作为入口的意义：点哪个状态，指挥员就以那个状态进场。
+          let started = false
+          if (normalized !== 'off' && agent && !hasCommander) {
+            try {
+              await startCommanderFromUi(agent)
+              started = true
+            } catch (error) {
+              return sendJson(
+                res,
+                {
+                  error: 'start failed',
+                  message: error && error.message ? error.message : String(error),
+                  state: current.state,
+                  source: current.source,
+                  label: TAKEOVER_LABELS[current.state] ?? current.state,
+                  states: TAKEOVER_STATES,
+                  labels: stateLabels(),
+                  hasCommander: false,
+                },
+                500,
+              )
+            }
+          }
           await setTakeoverOverride(sessionId, normalized)
           return sendJson(res, {
             state: normalized,
@@ -3221,6 +3260,8 @@ export function apply(ctx, rawConfig = {}) {
             label: TAKEOVER_LABELS[normalized] ?? normalized,
             states: TAKEOVER_STATES,
             labels: stateLabels(),
+            hasCommander: started ? true : hasCommander,
+            started,
           })
         }
         return sendJson(res, { error: 'method not allowed' }, 405)

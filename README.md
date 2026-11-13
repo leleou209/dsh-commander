@@ -2,7 +2,7 @@
 
 长线工作的「指挥员模式」：把一个**长期在线、可续接的 Agent Teams teammate** 装成「指挥员」（架构设计 + 督察指挥）。它读全部项目文件、跑只读 shell、可写文件但默认不动手，并通过 `send_message` 与 Lead 多轮对话。斜杠命令 `/commander`。
 
-> 当前版本 **2.9.18**，见 [CHANGELOG.md](CHANGELOG.md)。安装见 [INSTALL.md](INSTALL.md)，最短路径：
+> 当前版本 **2.9.19**，见 [CHANGELOG.md](CHANGELOG.md)。安装见 [INSTALL.md](INSTALL.md)，最短路径：
 >
 > ```sh
 > git clone https://github.com/leleou209/dsh-commander.git
@@ -170,21 +170,22 @@ checkCommands:
 - 分级前缀 `[信息]/[注意]/[失败]`；「已生效」与「失败」不混用；
 - `locale` 支持 `zh-CN` / `en`（`zh`、`zh-Hans` 归一化到 `zh-CN`）。
 
-## 接管状态（takeover，2.9.12）
+## 接管状态（takeover，2.9.19）
 
 指挥员对主会话的接管程度有四个状态，决定**哪些门禁生效**：
 
 | 状态 | 含义 | 问用户 | goal 的 complete/edit/pause/blocked |
 | --- | --- | --- | --- |
-| `off` 无指挥 | 没有指挥员 | 自由 | 自由 |
+| `off` 不运行指挥职责（无指挥） | 指挥员休息：`say`/`wait` 直接拒绝 | 自由 | 自由 |
 | `observe` 不接管 | 指挥员只当顾问 | 自由 | 自由 |
-| `partial` 部分接管 | 接管 goal 命令与放行 | 自由 | 需要放行/批准 |
+| `partial` 部分接管 | 接管 goal 命令与放行（**启动默认**） | 自由 | 需要放行/批准 |
 | `full` 全接管 | 你不在场，指挥员代言 | **必须先咨询** | 需要放行/批准 |
 
-- 默认**推导**：没有 teammate → `off`；有 teammate 且 goal active → `partial`；否则 `observe`。
-- 显式覆盖：`/commander takeover <off|observe|partial|full>`，或 `/commander takeover reset` 回到推导；覆盖值写进 `state.json` 的 `takeover` 表。
+- **只在启动指挥时初始化**：没有 teammate → `off`；有 teammate → 你显式选过的值，没选过就是 `partial`。接管宽度不再跟 goal 起落。
+- **不跨进程沿用**：接管状态只在内存里，重启后按启动口径重新初始化 —— 上一次的 `full` 不会在新进程里复活。`state.json` 里的 `takeover` 表已退役。
+- `off` 不是"解除指挥"：指挥员留在后台睡觉，`commander(action=say|wait)` 会被拒绝并回一句「用户已切换至不指挥状态，指挥agent已休息，请自行思考」。要恢复就切回 `observe` 及以上。
 - 你发来真实消息时 `full` 自动降为 `partial`（你在打字就说明你在场），`status` 会显示「部分接管（auto）」。
-- composer 工具行（模型选择器与发送键之间）有一个**皇冠图标**显示当前状态：灰色=观察、蓝色=部分、琥珀=全接管，点击循环切换。
+- composer 工具行（模型选择器与发送键之间）有一个**皇冠图标**：灰色=不运行职责、浅灰=顾问、蓝色=部分、琥珀=全接管。点开菜单选状态；如果指挥员还没起来，选「不接管」及以上会**顺手把它启动起来**，指挥员就以你选的状态进场。
 
 > 这就是 2.9.0–2.9.11 那条「每轮问用户都要先过指挥员」的收窄：只有 `full` 才拦。`off`/`observe` 下问凭据、选文件这类只有用户能答的问题不再白烧两轮。
 

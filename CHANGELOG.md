@@ -2,6 +2,17 @@
 
 版本号与 `package.json` / `index.js` 里的 `PLUGIN_VERSION` 一致；`/commander status` 首行显示运行中的版本。
 
+## 2.9.19
+
+接管状态从"每轮推导 + 落盘覆盖"改成"启动时初始化 + 只在内存里"，并让图标菜单成为启动入口。
+
+- **启动即初始化**：没有指挥员 → `off`；有指挥员 → 你选过的值，没选过就是 **`partial`**。接管宽度不再跟 goal 起落（以前有 goal 才 partial、没 goal 是 observe）。
+- **不跨进程沿用**：`takeover` 表退役，状态只在内存里。重启后按启动口径重新初始化，上一次的 `full` 不会在新进程里复活——那是唯一会挡住你自己问自己的方向。
+- **`off` 改成"不运行指挥职责"**：不再意味着"没有指挥员"。指挥员留在后台睡觉，`commander(action=say|wait)` 直接被拒绝并回一句「用户已切换至不指挥状态，指挥agent已休息，请自行思考」。没有"解除指挥"这个动作——切回 `observe` 及以上它就回来。
+- **菜单即入口**：指挥员还没起来时，选「不接管」及以上会顺手把它启动起来（`spawnTeammate`，和主 agent 自己启动同一个函数），指挥员就以你选的状态进场；选 `off` 什么也不启动。菜单底部有提示说明这件事。
+- `commander(action="start")` 新增可选 `state`：用户说"当顾问"传 `observe`、说"全接管"传 `full`，不说就 `partial`。启动输出里多一行「接管状态」。
+- 菜单去掉「自动（跟随 goal）」：推导值现在就等于 `partial`，这一项已经没有意义。
+
 ## 2.9.18
 
 - 修 `/commander/takeover` 在部分环境里 404：路由原来写在 `ctx.effect` 里用 `ctx.get('webServer')` 取服务，插件加载顺序不同时会取到 `undefined` 然后直接 return，之后再也不会注册（vps-hub 上就是这样，图标拿不到状态）。现在改成 `ctx.inject(['webServer'], …)`，等 webServer 就位再注册。

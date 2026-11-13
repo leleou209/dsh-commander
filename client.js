@@ -5,8 +5,10 @@
  * 交互：
  *   - 平时只显示皇冠 logo（按状态着色，off 时压暗但仍可点，避免"关掉就找不回来"）；
  *   - 鼠标停靠显示当前状态（原生 tooltip + 悬停高亮）；
- *   - 点击弹出菜单，直接选 4 个状态之一或"自动（清除覆盖）"；
- *   - 选完短暂回显一次状态名，再回到纯 logo。
+ *   - 点击弹出菜单，直接选 4 个状态之一；
+ *   - 选的是"运行职责"的状态而指挥员还没起来 → 这次点击顺手把它启动起来，
+ *     指挥员就以你选的状态进场；
+ *   - 切换后**只改颜色**，不回显文字：文字按钮落在 composer 里很容易被误点。
  *
  * 数据：Host 半的 `/commander/takeover` 路由（GET 读、POST 写）。
  * 客户端是普通浏览器模块，可以直接 fetch；菜单用 position:fixed 锚定按钮，
@@ -23,9 +25,9 @@ window.__ModuleLoader__.load({
 
     const ENDPOINT = '/commander/takeover'
     const POLL_MS = 8000
-    /** 菜单尺寸用于视口夹取（宽度固定，高度按 5 行估算）。 */
+    /** 菜单尺寸用于视口夹取（宽度固定，高度按 4 行 + 可能的一行提示估算）。 */
     const MENU_WIDTH = 208
-    const MENU_HEIGHT = 214
+    const MENU_HEIGHT = 186
 
     const PALETTE = {
       off: { ring: 'rgba(127,127,127,0.45)', fill: 'rgba(127,127,127,0.25)', dim: 0.55 },
@@ -77,6 +79,7 @@ window.__ModuleLoader__.load({
       const [open, setOpen] = React.useState(false)
       const [anchor, setAnchor] = React.useState(null)
       const [busy, setBusy] = React.useState(false)
+      const [failed, setFailed] = React.useState(false)
       const buttonRef = React.useRef(null)
 
       React.useEffect(() => {
@@ -118,6 +121,7 @@ window.__ModuleLoader__.load({
 
       const state = snapshot?.state ?? 'off'
       const labels = snapshot?.labels ?? {}
+      const hasCommander = snapshot?.hasCommander === true
       const label = labels[state] ?? state
       const palette = PALETTE[state] ?? PALETTE.observe
       const title = `指挥员接管：${label}（${state}）— 点击选择`
@@ -130,7 +134,11 @@ window.__ModuleLoader__.load({
           .then((result) => {
             setSnapshot(result)
           })
-          .catch(() => {})
+          .catch(() => {
+            // 失败不弹文字（会挡住 composer），用边框红一下；启动指挥员失败也走这里。
+            setFailed(true)
+            setTimeout(() => setFailed(false), 2000)
+          })
           .finally(() => setBusy(false))
       }
 
@@ -213,30 +221,22 @@ window.__ModuleLoader__.load({
                   option === state ? h('span', { style: { opacity: 0.6 } }, '当前') : null,
                 ),
               ),
-              h('div', {
-                style: { height: 1, margin: '4px 6px', background: 'rgba(127,127,127,0.25)' },
-              }),
-              h(
-                'button',
-                {
-                  type: 'button',
-                  onClick: () => choose('auto'),
-                  style: {
-                    display: 'block',
-                    width: '100%',
-                    padding: '6px 8px',
-                    border: 'none',
-                    borderRadius: 7,
-                    background: 'transparent',
-                    color: 'inherit',
-                    cursor: 'pointer',
-                    textAlign: 'left',
-                    fontSize: 12,
-                    opacity: 0.85,
-                  },
-                },
-                '自动（跟随 goal）',
-              ),
+              // 指挥员不在时，选"运行职责"的状态会顺手把它启动起来——先说明，别让点击显得没反应。
+              hasCommander
+                ? null
+                : h(
+                    'div',
+                    {
+                      style: {
+                        margin: '4px 6px 2px',
+                        paddingTop: 6,
+                        borderTop: '1px solid rgba(127,127,127,0.25)',
+                        opacity: 0.7,
+                        lineHeight: 1.5,
+                      },
+                    },
+                    '选「不接管」及以上会启动指挥员',
+                  ),
             )
           : null
 
@@ -267,7 +267,7 @@ window.__ModuleLoader__.load({
               height: 26,
               padding: 0,
               borderRadius: 8,
-              border: `1px solid ${open ? palette.ring : 'transparent'}`,
+              border: `1px solid ${failed ? '#ef4444' : open ? palette.ring : 'transparent'}`,
               background: open ? 'rgba(127,127,127,0.14)' : 'transparent',
               color: 'inherit',
               cursor: busy ? 'progress' : 'pointer',
