@@ -2,6 +2,10 @@
 
 版本号与 `package.json` / `index.js` 里的 `PLUGIN_VERSION` 一致；`/commander status` 首行显示运行中的版本。
 
+## 2.9.18
+
+- 修 `/commander/takeover` 在部分环境里 404：路由原来写在 `ctx.effect` 里用 `ctx.get('webServer')` 取服务，插件加载顺序不同时会取到 `undefined` 然后直接 return，之后再也不会注册（vps-hub 上就是这样，图标拿不到状态）。现在改成 `ctx.inject(['webServer'], …)`，等 webServer 就位再注册。
+
 ## 2.9.17
 
 - 去掉切换状态后的文字回显：之前点完菜单，图标会短暂变成一段文字（"全接管"等），而那段文字本身也带着点击热区，点上去会直接把状态再改一次，很容易误触。现在切完只更新颜色，状态名只在鼠标停靠的 `title` 提示和菜单里出现。

@@ -36,7 +36,7 @@ import {
 import { createTranslator, localeKeyDiff } from './messages.js'
 
 /** 运行时版本标记：status 里显示，用来确认当前进程加载的是哪一版代码（HMR 是否生效）。 */
-const PLUGIN_VERSION = '2.9.17'
+const PLUGIN_VERSION = '2.9.18'
 
 /** 从 DSH 安装目录加载 schemastery；失败时插件仍可运行，只是 Plugin Manager 不显示 Config。 */
 function loadSchemaLib() {
@@ -3151,9 +3151,12 @@ export function apply(ctx, rawConfig = {}) {
   // 用 handler 而不是 resource：宿主的 resource 路由只接受 GET/HEAD，POST 会被直接
   // 405 掉，而图标点击需要写状态。
   hydrateTakeover().catch(() => {})
-  ctx.effect(() => {
-    const webServer = ctx.get('webServer')
+  // 必须用 ctx.inject 等 webServer 就位：直接 ctx.get 时插件加载顺序不同就会拿到
+  // undefined，然后 return 掉再也不注册（vps 上就是这么 404 的）。
+  ctx.inject(['webServer'], (webCtx) => {
+    const webServer = webCtx.get('webServer')
     if (!webServer || typeof webServer.register !== 'function') return
+    webCtx.effect(() => {
     const sendJson = (res, body, status = 200) => {
       const payload = JSON.stringify(body)
       res.writeHead(status, {
@@ -3222,6 +3225,7 @@ export function apply(ctx, rawConfig = {}) {
         }
         return sendJson(res, { error: 'method not allowed' }, 405)
       },
+      })
     })
   })
 }
