@@ -62,6 +62,7 @@ export function renderReport(input = {}) {
   if (tools.length > 0) {
     lines.push('', '本轮工具：')
     for (const row of tools.slice(0, 16)) lines.push(`- ${row}`)
+    if (tools.length > 16) lines.push(`- …还有 ${tools.length - 16} 条（未列）`)
   }
   lines.push('', '请给下一步指令：继续 / 需澄清 / 允许结束。')
   if (codeState.length > 0) lines.push('', `代码状态：${codeState}`)

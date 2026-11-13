@@ -2,6 +2,17 @@
 
 版本号与 `package.json` / `index.js` 里的 `PLUGIN_VERSION` 一致；`/commander status` 首行显示运行中的版本。
 
+## 2.9.34
+
+以自己为使用案例做了一轮审计，修掉四个真 bug：
+
+- **斜杠命令改状态不通知、也清不掉停运**：`/commander takeover <状态>` 原来只写覆盖值。于是（a）状态变了但主agent 不知道；（b）停运后从斜杠命令**恢复不了**。现在图标路由与斜杠命令共用 `applyTakeoverChange()`：写值 + 通知 + 清 `stopped/interrupted/turnEnded/lastSkip/lastError` 三件事一起做。
+- **`pre-step` 只按 source 匹配自己的消息**：`wakeWithInstruction` 在 `senderSessionId` 不合法时会退回 `runtime-context`，那时 `source.kind` 不是 `agent-message`，fail-closed 校验就漏掉了这条指令。改成只认 id 前缀 `commander-handoff-`。
+- **空输出静默跳过**：`report` 和 `tools` 都为空时直接 return，`turnEnded` 已被消费却没有任何记录。现在记 `lastSkip`。
+- **工具摘要超 16 条直接丢弃**：现在补一行「…还有 N 条（未列）」。
+
+顺带优化：`lastTurnStartSeq()` 改为从后往前找第一个 `turn/start`，长会话不再每轮全量扫描事件。
+
 ## 2.9.33
 
 - **失败路径补齐 pending 清理**：抽出纯函数 `afterWait()`（`handoff.js`）统一决策——`dead`/`timeout` 停运、用户插话让位、`stale`/`failed` 也停，**这三种情况都会清掉 pending**，不再留脏记录；`stopping` 时不动 pending。`test/handoff.mjs` 加了 4 项断言覆盖这三条。

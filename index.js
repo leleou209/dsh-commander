@@ -41,7 +41,7 @@ import { createTranslator, localeKeyDiff } from './messages.js'
 import { afterWait, classifyReply, commanderDead, HANDOFF_SOURCE, renderInstruction, renderReport, shouldHandoff } from './handoff.js'
 
 /** 运行时版本标记：status 里显示，用来确认当前进程加载的是哪一版代码（HMR 是否生效）。 */
-const PLUGIN_VERSION = '2.9.33'
+const PLUGIN_VERSION = '2.9.34'
 
 /** 从 DSH 安装目录加载 schemastery；失败时插件仍可运行，只是 Plugin Manager 不显示 Config。 */
 function loadSchemaLib() {
@@ -1758,8 +1758,14 @@ export function apply(ctx, rawConfig = {}) {
   function lastTurnStartSeq(session) {
     let seq = 0
     try {
-      for (const event of session?.ownEvents?.() ?? []) {
-        if (event?.type === 'turn/start' && typeof event.seq === 'number') seq = event.seq
+      const events = session?.ownEvents?.() ?? []
+      // 从后往前找：长会话每轮都全量扫描是浪费。
+      for (let index = events.length - 1; index >= 0; index -= 1) {
+        const event = events[index]
+        if (event?.type === 'turn/start' && typeof event.seq === 'number') {
+          seq = event.seq
+          break
+        }
       }
     } catch {
       seq = 0
@@ -1798,7 +1804,10 @@ export function apply(ctx, rawConfig = {}) {
     const tools = summarizeTools(session, fromSeq)
     state.lastSeq = session?.seq ?? 0
     state.lastAt = Date.now()
-    if (report.trim().length === 0 && tools.length === 0) return
+    if (report.trim().length === 0 && tools.length === 0) {
+      state.lastSkip = '本轮没有可见输出也没有工具调用'
+      return
+    }
     state.inFlight = true
     try {
       // sendToCommander 底层的 team 服务会校验 AbortSignal，传 undefined 会抛
@@ -1918,10 +1927,9 @@ export function apply(ctx, rawConfig = {}) {
     })
     // 排队后世界变了：状态已不是全接管就拒绝这条交接指令，绝不带着过期指令开跑。
     ctx.on('agent/pre-step', async ({ agent, messages }, next) => {
-      const mine = (messages ?? []).find(
-        (message) =>
-          message?.source?.kind === 'agent-message' && String(message.id ?? '').startsWith('commander-handoff-'),
-      )
+      // 只认 id 前缀：wakeWithInstruction 在 senderSessionId 不合法时会退回
+      // runtime-context，那时 source.kind 不是 agent-message，按 source 匹配就漏了。
+      const mine = (messages ?? []).find((message) => String(message?.id ?? '').startsWith('commander-handoff-'))
       if (mine === undefined) return next()
       if (currentTakeover(agent).state !== 'full') {
         handoffStateFor(agent).stopped = true
@@ -1941,6 +1949,31 @@ export function apply(ctx, rawConfig = {}) {
       handoffStates.clear()
     }
   })
+
+  /**
+   * 接管状态变更的统一入口（图标路由 / 斜杠命令共用）。
+   *
+   * 三件事必须一起做，缺一就会不一致：
+   *   1. 写覆盖值；
+   *   2. 写一条通知让主agent 知道（状态没变就不写，免得刷屏）；
+   *   3. 清掉「停运/让位」——重新设定就是显式要求重新开始。
+   *
+   * @returns {boolean} 是否真的写了通知
+   */
+  async function applyTakeoverChange(sessionId, state) {
+    const before = takeoverOverrides.get(sessionId)?.state
+    await setTakeoverOverride(sessionId, state)
+    const announced = state === before ? false : announceTakeover(sessionId, state)
+    const handoff = handoffStates.get(sessionId)
+    if (handoff !== undefined) {
+      handoff.stopped = false
+      handoff.interrupted = false
+      handoff.turnEnded = false
+      handoff.lastSkip = undefined
+      handoff.lastError = undefined
+    }
+    return announced
+  }
 
   async function pendingUnit() {
     if (pendingUnitPromise === undefined) {
@@ -3541,7 +3574,9 @@ export function apply(ctx, rawConfig = {}) {
             text: `未知接管状态 "${requested}"；可选：${TAKEOVER_STATES.join(' / ')}，或 reset 回到推导值。`,
           }
         }
-        await setTakeoverOverride(leadId, normalized)
+        // 斜杠命令与图标路由走同一个入口：否则从这里改状态既不通知主agent，
+        // 也清不掉「停运」——停运后用斜杠命令恢复不了。
+        await applyTakeoverChange(leadId, normalized)
         return {
           kind: 'success',
           text: `接管状态已设为：${TAKEOVER_LABELS[normalized]}（${normalized}）。${takeoverLine(agent)}`,
@@ -3724,17 +3759,8 @@ export function apply(ctx, rawConfig = {}) {
               )
             }
           }
-          await setTakeoverOverride(sessionId, normalized)
-          // 用户点了图标就是做了决定：写一条 developer 消息，主agent 下一轮就知道。
-          // 状态没变就不写，免得反复点同一个选项刷屏。
-          const announced = normalized === current.state ? false : announceTakeover(sessionId, normalized)
-          // 重新设定接管状态 = 显式要求重新开始，把「停运/让位」清掉。
-          const handoff = handoffStates.get(sessionId)
-          if (handoff !== undefined) {
-            handoff.stopped = false
-            handoff.interrupted = false
-            handoff.turnEnded = false
-          }
+          // 用户点了图标就是做了决定：统一入口负责「写值 + 通知 + 清停运」。
+          const announced = await applyTakeoverChange(sessionId, normalized)
           return sendJson(res, {
             state: normalized,
             source: 'user',
