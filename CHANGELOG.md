@@ -2,6 +2,10 @@
 
 版本号与 `package.json` / `index.js` 里的 `PLUGIN_VERSION` 一致；`/commander status` 首行显示运行中的版本。
 
+## 2.9.17
+
+- 去掉切换状态后的文字回显：之前点完菜单，图标会短暂变成一段文字（"全接管"等），而那段文字本身也带着点击热区，点上去会直接把状态再改一次，很容易误触。现在切完只更新颜色，状态名只在鼠标停靠的 `title` 提示和菜单里出现。
+
 ## 2.9.16
 
 - 菜单改用 `ReactDOM.createPortal(menu, document.body)`：composer 里有 `transform` 祖先时，`position: fixed` 会相对那个祖先定位，菜单因此固定出现在视口右下角。挂到 body 后 `fixed` 才是真正的视口坐标，也不再被 composer 裁切；保留滚动收起、视口夹取与上下翻转。

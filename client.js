@@ -23,7 +23,6 @@ window.__ModuleLoader__.load({
 
     const ENDPOINT = '/commander/takeover'
     const POLL_MS = 8000
-    const FLASH_MS = 1600
     /** 菜单尺寸用于视口夹取（宽度固定，高度按 5 行估算）。 */
     const MENU_WIDTH = 208
     const MENU_HEIGHT = 214
@@ -77,7 +76,6 @@ window.__ModuleLoader__.load({
       const [snapshot, setSnapshot] = React.useState(null)
       const [open, setOpen] = React.useState(false)
       const [anchor, setAnchor] = React.useState(null)
-      const [flash, setFlash] = React.useState('')
       const [busy, setBusy] = React.useState(false)
       const buttonRef = React.useRef(null)
 
@@ -97,13 +95,6 @@ window.__ModuleLoader__.load({
           clearInterval(timer)
         }
       }, [sessionId])
-
-      // 选完回显状态名，一会儿再收回
-      React.useEffect(() => {
-        if (!flash) return undefined
-        const timer = setTimeout(() => setFlash(''), FLASH_MS)
-        return () => clearTimeout(timer)
-      }, [flash])
 
       // 点菜单外面就收起
       React.useEffect(() => {
@@ -138,7 +129,6 @@ window.__ModuleLoader__.load({
         writeState(sessionId, next)
           .then((result) => {
             setSnapshot(result)
-            setFlash(result?.labels?.[result.state] ?? result?.state ?? '')
           })
           .catch(() => {})
           .finally(() => setBusy(false))
@@ -295,21 +285,6 @@ window.__ModuleLoader__.load({
           },
           h(Crown, { state, size: 16 }),
         ),
-        flash
-          ? h(
-              'span',
-              {
-                style: {
-                  fontSize: 11,
-                  lineHeight: 1,
-                  opacity: 0.85,
-                  whiteSpace: 'nowrap',
-                  pointerEvents: 'none',
-                },
-              },
-              flash,
-            )
-          : null,
         portalMenu,
       )
     }
