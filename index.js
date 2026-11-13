@@ -41,7 +41,7 @@ import { createTranslator, localeKeyDiff } from './messages.js'
 import { classifyReply, commanderDead, HANDOFF_SOURCE, renderInstruction, renderReport, shouldHandoff } from './handoff.js'
 
 /** 运行时版本标记：status 里显示，用来确认当前进程加载的是哪一版代码（HMR 是否生效）。 */
-const PLUGIN_VERSION = '2.9.25'
+const PLUGIN_VERSION = '2.9.26'
 
 /** 从 DSH 安装目录加载 schemastery；失败时插件仍可运行，只是 Plugin Manager 不显示 Config。 */
 function loadSchemaLib() {
@@ -1580,12 +1580,14 @@ export function apply(ctx, rawConfig = {}) {
   function handoffLine(agent) {
     if (currentTakeover(agent).state !== 'full') return '未启用（只有全接管才自动交接）'
     const state = handoffStates.get(agent.id)
-    if (state === undefined) return '待触发（等这一轮结束）'
-    if (state.stopping) return '正在停止'
-    if (state.stopped) return '已停运（指挥员挂死或超时；重新设定接管状态即可恢复）'
-    if (state.inFlight) return '等待指挥员回复'
-    if (state.interrupted) return '你刚插过话，这一轮交还给你'
-    return '待触发（等这一轮结束）'
+    if (state === undefined) return '待触发（还没见过这个会话的 idle）'
+    // 括号里的计数是诊断用的：0/0 说明事件根本没到，>0 说明是门禁挡住的。
+    const seen = `（idle×${state.idleSeen}，turn/end×${state.turnEndSeen}）`
+    if (state.stopping) return `正在停止${seen}`
+    if (state.stopped) return `已停运（指挥员挂死或超时；重新设定接管状态即可恢复）${seen}`
+    if (state.inFlight) return `等待指挥员回复${seen}`
+    if (state.interrupted) return `你刚插过话，这一轮交还给你${seen}`
+    return `待触发（等这一轮结束）${seen}`
   }
 
   /**
@@ -1639,6 +1641,8 @@ export function apply(ctx, rawConfig = {}) {
       stopping: false,
       stopped: false,
       turnEnded: false,
+      idleSeen: 0,
+      turnEndSeen: 0,
       lastSeq: 0,
       lastAt: 0,
       run: undefined,
@@ -1832,8 +1836,16 @@ export function apply(ctx, rawConfig = {}) {
 
   ctx.effect(function* () {
     ctx.on('agent/status', ({ agent, status }) => {
-      if (status !== 'idle') return
-      requestHandoffDrive(handoffStateFor(agent))
+      if (!agent || status !== 'idle') return
+      const state = handoffStateFor(agent)
+      state.idleSeen += 1
+      requestHandoffDrive(state)
+      // turn/end 可能比 agent/status 晚一步到：顺序不对时这里先跳过了一次，
+      // 补一次延迟重试，别把这次交接丢掉。
+      if (!state.turnEnded && !state.inFlight && !state.stopped) {
+        const timer = setTimeout(() => requestHandoffDrive(handoffStateFor(agent)), 300)
+        timer.unref?.()
+      }
     })
     ctx.on('session/event', (session, event) => {
       const agent = ctx.get('agents')?.get?.(session.id)
@@ -1845,8 +1857,14 @@ export function apply(ctx, rawConfig = {}) {
       }
       if (event?.type === 'turn/end') {
         const state = handoffStateFor(agent)
-        if (event.data?.reason?.kind === 'aborted') state.interrupted = true
-        else state.turnEnded = true
+        if (event.data?.reason?.kind === 'aborted') {
+          state.interrupted = true
+          return
+        }
+        state.turnEnded = true
+        state.turnEndSeen += 1
+        // 真正的触发点：一轮真的结束了就请求交接（agent/status 只是兜底）。
+        requestHandoffDrive(state)
       }
     })
     // 排队后世界变了：状态已不是全接管就拒绝这条交接指令，绝不带着过期指令开跑。

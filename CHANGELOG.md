@@ -2,6 +2,11 @@
 
 版本号与 `package.json` / `index.js` 里的 `PLUGIN_VERSION` 一致；`/commander status` 首行显示运行中的版本。
 
+## 2.9.26
+
+- **修自动交接不触发**：`agent/status=idle` 和 `turn/end` 的到达顺序不固定。原来只在 `agent/status` 里驱动，而驱动又要求 `turnEnded=true` —— 顺序反过来时这一次交接就被静默丢掉了（实跑验证：pending 里空的，指挥员根本没收到）。现在 `turn/end` 本身就是触发点，`agent/status` 只作兜底，且顺序不对时延迟 300ms 重试一次。
+- **`status` 的「自动交接」行带诊断计数**：`（idle×N，turn/end×M）`。0/0 说明事件根本没到插件，>0 说明是门禁挡住的 —— 下次排查不用猜。
+
 ## 2.9.25
 
 - **交接汇报带上工具摘要**：`summarizeTools()` 把本轮的 `tool/call` + `tool/result` 配成一行一条（`✓/✗ 名字: 参数前 60 字`，最多 16 行）塞进交给指挥员的汇报。之前只有最后一段文本，指挥员每轮都在盲判，得自己跑 `status`/`checks` 才知道改了什么。
