@@ -38,9 +38,10 @@ import {
   TAKEOVER_STATES,
 } from './takeover.js'
 import { createTranslator, localeKeyDiff } from './messages.js'
+import { classifyReply, HANDOFF_SOURCE, renderInstruction, renderReport, shouldHandoff } from './handoff.js'
 
 /** 运行时版本标记：status 里显示，用来确认当前进程加载的是哪一版代码（HMR 是否生效）。 */
-const PLUGIN_VERSION = '2.9.22'
+const PLUGIN_VERSION = '2.9.23'
 
 /** 从 DSH 安装目录加载 schemastery；失败时插件仍可运行，只是 Plugin Manager 不显示 Config。 */
 function loadSchemaLib() {
@@ -1582,6 +1583,156 @@ export function apply(ctx, rawConfig = {}) {
       return false
     }
   }
+
+  // ---- 全接管：自动交接 ----
+  //
+  // 用户口径：full 不是"加门禁"，是**换驾驶员**——主agent 每轮停下就把输出交回
+  // 指挥员，钩子等它的指令，再把它作为新一轮的输入唤醒主agent。轮次不限，只由
+  // 指挥员声明任务完成来结束；中断就是中断，不改接管状态。
+  const handoffStates = new Map()
+
+  function handoffStateFor(agent) {
+    const existing = handoffStates.get(agent.id)
+    if (existing !== undefined) return existing
+    const state = {
+      agent,
+      inFlight: false,
+      interrupted: false,
+      stopping: false,
+      rounds: 0,
+      lastSeq: 0,
+      lastAt: 0,
+      run: undefined,
+      requested: false,
+    }
+    handoffStates.set(agent.id, state)
+    return state
+  }
+
+  /** 把指挥员的指令注入回主agent，并唤醒它开新一轮。 */
+  function wakeWithInstruction(agent, text, commanderId) {
+    const base = {
+      role: 'user',
+      id: `commander-handoff-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+      content: [{ type: 'text', text: renderInstruction(text) }],
+    }
+    try {
+      agent.followup({ ...base, source: { ...HANDOFF_SOURCE, senderSessionId: commanderId } })
+      return true
+    } catch (error) {
+      // senderSessionId 缺失/不合法时退回 runtime-context：语义弱一点，但能送达。
+      try {
+        agent.followup({ ...base, source: { kind: 'runtime-context' } })
+        return true
+      } catch (fallbackError) {
+        ctx.logger?.warn?.(
+          `dsh-commander: 自动交接唤醒失败：${fallbackError && fallbackError.message ? fallbackError.message : fallbackError}`,
+        )
+        return false
+      }
+    }
+  }
+
+  async function driveHandoff(state) {
+    const agent = state.agent
+    const header = agent?.session?.header
+    const isLead = Boolean(header) && !header.parentSession && !commanderIds.has(agent.id)
+    const ready = shouldHandoff({
+      stopping: state.stopping,
+      inFlight: state.inFlight,
+      isLead,
+      takeover: currentTakeover(agent).state,
+      status: agent.status,
+      interrupted: state.interrupted,
+    })
+    if (!ready) {
+      // 用户刚插过话：只跳过这一轮，状态不动。
+      if (state.interrupted) state.interrupted = false
+      return
+    }
+    const session = agent.session
+    const report = lastAssistantText(session, state.lastSeq, state.lastAt)
+    state.lastSeq = session?.seq ?? 0
+    state.lastAt = Date.now()
+    if (report.trim().length === 0) return
+    state.inFlight = true
+    state.rounds += 1
+    const round = state.rounds
+    try {
+      const cwd = await resolveCwd(ctx, agent, undefined).catch(() => process.cwd())
+      const sent = await sendToCommander(agent, undefined, renderReport({ round, report }), undefined, cwd)
+      const result = await waitCommander(agent, sent?.requestId)
+      if (state.stopping) return
+      if (result?.kind !== 'reply') {
+        ctx.logger?.warn?.(`dsh-commander: 自动交接 #${round} 没拿到回复（${result?.kind ?? 'unknown'}）`)
+        return
+      }
+      const verdict = classifyReply(result.text)
+      if (verdict === 'finish') {
+        ctx.logger?.info?.(`dsh-commander: 自动交接 #${round} 收到「允许结束」，停止驱动`)
+        return
+      }
+      const pending = await loadPending(rootSessionIdOf(agent)).catch(() => undefined)
+      wakeWithInstruction(agent, result.text, pending?.commanderId ?? '')
+    } catch (error) {
+      ctx.logger?.warn?.(`dsh-commander: 自动交接失败：${error && error.message ? error.message : error}`)
+    } finally {
+      state.inFlight = false
+    }
+  }
+
+  /** 同一个 agent 的驱动串行化（照 goal-round-driver 的骨架）。 */
+  function requestHandoffDrive(state) {
+    if (state.stopping) return
+    state.requested = true
+    if (state.run !== undefined) return
+    const run = ctx.agents.withoutInitiator(async () => {
+      while (state.requested && !state.stopping) {
+        state.requested = false
+        try {
+          await driveHandoff(state)
+        } catch (error) {
+          ctx.logger?.warn?.(`dsh-commander: 交接驱动异常：${error && error.message ? error.message : error}`)
+        }
+      }
+    })
+    state.run = run
+    const retire = () => {
+      state.run = undefined
+      if (state.requested && !state.stopping) requestHandoffDrive(state)
+    }
+    run.then(retire, retire)
+  }
+
+  ctx.effect(function* () {
+    ctx.on('agent/status', ({ agent, status }) => {
+      if (status !== 'idle') return
+      requestHandoffDrive(handoffStateFor(agent))
+    })
+    ctx.on('session/event', (session, event) => {
+      const agent = ctx.get('agents')?.get?.(session.id)
+      if (!agent || agent.session !== session) return
+      // 用户发言或中断：这一轮不交接，方向盘交还给用户；接管状态不变。
+      if (event?.type === 'user/message' && event.data?.source?.kind === 'user') {
+        handoffStateFor(agent).interrupted = true
+        return
+      }
+      if (event?.type === 'turn/end' && event.data?.reason?.kind === 'aborted') {
+        handoffStateFor(agent).interrupted = true
+      }
+    })
+    ctx.on('agent/disposed', ({ agent }) => {
+      const state = handoffStates.get(agent.id)
+      if (state !== undefined) {
+        state.stopping = true
+        handoffStates.delete(agent.id)
+      }
+    })
+    yield () => {
+      for (const state of handoffStates.values()) state.stopping = true
+      handoffStates.clear()
+    }
+  })
 
   async function pendingUnit() {
     if (pendingUnitPromise === undefined) {

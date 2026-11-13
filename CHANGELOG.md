@@ -2,6 +2,18 @@
 
 版本号与 `package.json` / `index.js` 里的 `PLUGIN_VERSION` 一致；`/commander status` 首行显示运行中的版本。
 
+## 2.9.23
+
+**`full` 从"加门禁"改成"换驾驶员"**：主agent 每轮停下就把输出自动交回指挥员，钩子等它的指令，再把指令注入回去唤醒新一轮。轮次不限，只由指挥员声明任务完成来结束。
+
+- 新增 `handoff.js`（纯逻辑）：`shouldHandoff()` 判定何时交接、`classifyReply()` 分「允许结束 / 需澄清 / 继续」、`renderReport()` / `renderInstruction()` 两段文案。
+- 新增自动交接驱动（照宿主 `goal-round-driver` 的骨架）：`agent/status → idle` 触发、按 agent 串行化、`ctx.agents.withoutInitiator` 起跑。
+- 唤醒用宿主原语 `agent.followup(message)`（塞进 `inbox.next-turn` 并唤醒驱动器）；注入的指令 `source` 用 `{kind:'agent-message', form:'relay', senderSessionId}`，失败退回 `runtime-context`。
+- **中断就是中断，不改接管状态**：用户发言或 `turn/end` 被中断，只让这一轮不交接（方向盘交还给你），`full` 保持不变。
+- 取本轮输出用 `lastAssistantText(session, lastSeq, lastAt)`，交接后推进基线，不会把同一段话重复发。
+- 指挥员回「允许结束」→ 停止驱动（不自动改状态）。
+- 测试：新增 `test/handoff.mjs`（9 项），并登记到 profile 的受控检查（`commander(action="checks")` 现在有 6 项）。
+
 ## 2.9.22
 
 全接管的强制力补强，以及按用户决定去掉自动降级。
