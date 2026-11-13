@@ -51,7 +51,7 @@ tar -xzf local-dsh-commander-2.9.34.tgz
 
 ## 安装后自检
 
-在插件目录跑七套离线测试：
+在插件目录跑八套离线测试：
 
 ```sh
 node test/offline.mjs
@@ -60,10 +60,11 @@ node test/handoff.mjs
 node test/regressions.mjs
 node test/state-store.mjs
 node test/manual.mjs
+node test/style.mjs
 node test/transcript-window.mjs
 ```
 
-预期依次是 `ALL CHECKS PASSED` / `TAKEOVER CHECKS PASSED` / `HANDOFF CHECKS PASSED` / `REGRESSION CHECKS PASSED` / `STATE STORE CHECKS PASSED` / `MANUAL CHECKS PASSED` / `TRANSCRIPT WINDOW CHECKS PASSED`。
+预期依次是 `ALL CHECKS PASSED` / `TAKEOVER CHECKS PASSED` / `HANDOFF CHECKS PASSED` / `REGRESSION CHECKS PASSED` / `STATE STORE CHECKS PASSED` / `MANUAL CHECKS PASSED` / `STYLE CHECKS PASSED` / `TRANSCRIPT WINDOW CHECKS PASSED`。
 
 在 DSH 里：
 

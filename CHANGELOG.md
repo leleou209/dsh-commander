@@ -2,6 +2,36 @@
 
 版本号与 `package.json` / `index.js` 里的 `PLUGIN_VERSION` 一致；`/commander status` 首行显示运行中的版本。
 
+## 2.9.38
+
+代码整理第一批（P1 拆模块 + P3 卫生）。零行为变化，八个套件全绿。
+
+**P1：从 `index.js` 搬出四个模块**（逻辑逐行未改，只把依赖改成工厂注入）
+
+| 新模块 | 行数 | 内容 |
+| --- | --- | --- |
+| `prompts.js` | 131 | doc 骨架、goal 提醒、`buildCommanderPrompt`、`nowText` |
+| `checks.js` | 183 | `checkCatalog` / `spawnCheck` / `runChecks` + 超时杀进程树 + 尾部截断 |
+| `doctor.js` | 271 | `doctorReport` / `profileMounts` / `packageVersionAt` |
+| `handoff-driver.js` | 313 | `driveHandoff` / `waitCommanderGuarded` / `requestHandoffDrive` / `wakeWithInstruction` / `summarizeTools` / `lastTurnStartSeq` / `lastAssistantText` |
+
+`index.js` **3810 → 3136 行**（-674）。三处必要的实质改动，其余全是搬移：
+- `doctor.js` 里的 `PLUGIN_DIR` 不能再用 `import.meta.url` 推导（在 doctor.js 里那会指向它自己），改由调用方传入；
+- `doctor.js` 里 `ctx.get('goals')` 改为注入的 `getGoal(agent)`；
+- 四个工厂的依赖表显式列出（`createChecks` / `createDoctor` / `createHandoffDriver`），函数签名就是耦合清单。
+
+**P3：新增 `test/style.mjs` 当 lint（零依赖）**，6 项检查：
+- 单文件 ≤900 行、单函数 ≤120 行；历史遗留进 `BASELINE`，**只降不升、不许新增条目**，函数改名后基线条目必须同步清理；
+- 禁止真正空的 `catch {}`（实测现有代码**没有**空 catch——之前审计说的「74 处空 catch」是误读，那 74 处都有处理体，本轮修正了这条结论）；
+- 单行 ≤140 字符（文本资产有基线）；
+- 模块不得反向 import `index.js`，不得有循环依赖。
+
+**新增 `ARCHITECTURE.md`**（91 行）：模块图、依赖方向、各模块职责与行数、为什么这样切、
+还留在 `index.js` 里的东西与 P2 计划、规范与测试地图。
+
+**未达标项（如实记录）**：计划里写的是 `index.js ≤2700`，实际 **3136**。差的 400 多行是工具入口
+`execute()`(322) 与斜杠命令 `handleCommanderCommand`(133) 及其渲染——它们必须一起改成 action 表
+才有意义，属于 P2；半步搬一次等于白搬。
 ## 2.9.37
 
 用户：「改成英文吧，英文省token」。说明书整份英文化，契约令牌不动。

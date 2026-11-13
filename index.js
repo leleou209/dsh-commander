@@ -38,10 +38,14 @@ import {
 } from './takeover.js'
 import { createTranslator, localeKeyDiff } from './messages.js'
 import { afterWait, classifyReply, commanderDead, HANDOFF_SOURCE, renderInstruction, renderReport, shouldHandoff } from './handoff.js'
+import { DEFAULT_GOAL_REMINDER, DOC_FILES, DOC_HEADERS, GOAL_MARKER, buildCommanderPrompt, nowText } from './prompts.js'
+import { createChecks } from './checks.js'
+import { createDoctor } from './doctor.js'
+import { createHandoffDriver } from './handoff-driver.js'
 import { COMMANDER_TOOL_DESCRIPTION, manualTopicIds, renderManualIndex, renderManualTopic } from './manual.js'
 
 /** 运行时版本标记：status 里显示，用来确认当前进程加载的是哪一版代码（HMR 是否生效）。 */
-const PLUGIN_VERSION = '2.9.37'
+const PLUGIN_VERSION = '2.9.38'
 
 /** 从 DSH 安装目录加载 schemastery；失败时插件仍可运行，只是 Plugin Manager 不显示 Config。 */
 function loadSchemaLib() {
@@ -79,47 +83,8 @@ export const inject = ['tools', 'subagents']
 const PTC_TRANSPORT = 'run_code'
 
 /** goal 协作提醒标记，用于避免重复改写同一目标。 */
-const GOAL_MARKER = '[指挥协作]'
 
-/** 四份文档：文件名 -> 首部标题块。 */
-const DOC_HEADERS = {
-  suggest: [
-    '# 建议板 suggest.md',
-    '',
-    '> 仅由用户编写；指挥员 每一轮都必须先读本文件；最新内容在最上方。',
-    '> 每条建议请标注事件（时间或里程碑），例如：',
-    '>',
-    '> ## 2026-11-02 · 事件：登录接口改造',
-    '>',
-    '> - 建议：先补失败用例，再改实现。',
-    '>',
-    '> ## 2026-11-03 · 事件：发布前检查',
-    '>',
-    '> - 约束：不要改动 public API。',
-    '',
-  ].join('\n') + '\n',
-  history: [
-    '# 行动历史 history.md',
-    '',
-    '> 由主agent记录已完成的实质行为；最新内容在最上方。',
-    '> 指挥员依据本文件判断进度，避免重复建议已完成的事项。',
-    '',
-  ].join('\n') + '\n',
-  plan: [
-    '# 计划板 plan.md',
-    '',
-    '> 由指挥员维护当前计划，并保留历史轮次留痕；最新内容在最上方。',
-    '',
-  ].join('\n') + '\n',
-  agent: [
-    '# 设计导向 agent.md',
-    '',
-    '> 由指挥员维护：编辑行为分化与整体设计导向；最新内容在最上方。',
-    '',
-  ].join('\n') + '\n',
-}
 
-const DOC_FILES = ['suggest', 'history', 'plan', 'agent']
 
 /** 指挥员可用的只读工具名（按项目实际挂载情况取交集）。 */
 const DEFAULT_READ_ONLY_TOOLS = [
@@ -135,22 +100,6 @@ const DEFAULT_READ_ONLY_TOOLS = [
   'apply_patch',
 ]
 
-const DEFAULT_GOAL_REMINDER = [
-  GOAL_MARKER,
-  '指挥员是唯一的决策入口：任何新任务/阶段开始前，先用 commander(action=say) 汇报目标与计划，再 commander(action=wait) 取得指令；不要先问用户。',
-  '每完成一个可验收阶段，必须先向指挥员汇报（轮次/指令、改动、验证命令与结果、问题/风险、代码版本）并 wait；收到「继续」才进入下一轮，收到「允许结束」才交付。',
-  '收到「继续」时分流：单点疑问/小 bug 直接修并简短回报，不要包装成批次；方向性/多步工作才按批次连续完成再汇报。',
-  '批次内小取舍自行决定；只有整批完成、真正阻塞或需用户拍板才回报；不要为小问题走完整汇报仪式。',
-  '向指挥员要下一批时，明确请求「给出一批可连续完成的工作」，并说明当前批次状态与剩余量。',
-  '只有指挥员回「需澄清」或明确要求用户拍板时，才使用 ask_user_question；禁止用用户代替指挥员。未咨询指挥员就直接问用户，会被工具拒绝。',
-  '如果需要用户输入（选方向、给时间窗、确认不可逆操作）：先 commander(action=say) 说明卡点并请求「暂时作结」，拿到指挥员的「决定：需澄清」+「批准：goal pause」后再暂停 goal、向用户提问、本轮结束。不要在等用户期间继续 goal 自动轮空转。',
-  'wait 返回 interrupt 时只验收/记录已完成工作，不分发新工作，处理完再次 wait；用户中断后下一轮先看 commander status，有 pending 就恢复 wait（用户明确不再关注则 cancel）。',
-  '允许结束必须回显 Lead 消息里的 CODE_STATE；每条回复头部还要有「请求：<REQ id>」，缺失或不匹配不会被采用；代码状态变化或写操作会让放行失效。',
-  'goal 状态/内容变更（edit/pause/blocked）必须先取得指挥员「批准：goal <动作>」；paused goal 只能由用户在界面恢复，模型无权 resume；complete 只认「允许结束」。',
-  '用户要求模糊时按最可能意图推断并执行，不要为显而易见的结论反复询问；只有不可逆/改变语义/成本高才澄清。',
-  '正常推进时按 doc/plan.md 的下一步建议执行，并把进展记录到 doc/history.md；阶段完成/大改动/验收前提醒 Lead 执行 git 管理并检查 git status。',
-  '工程组 / Agent Teams / 其他子agent 仍是执行主体，指挥员只做指挥，不要为等它而停止 goal。',
-].join('')
 
 
 
@@ -295,13 +244,6 @@ function normalizeConfig(raw) {
 }
 
 /** 当前时间的可读文本（宿主本地时区）。 */
-function nowText() {
-  try {
-    return new Date().toLocaleString('zh-CN', { hour12: false })
-  } catch {
-    return new Date().toISOString()
-  }
-}
 
 /** 单行概括文本。 */
 function oneLine(text) {
@@ -458,57 +400,6 @@ async function readDocsState(cwd, config) {
 
 
 /** 组装指挥员 teammate 的初始提示。 */
-function buildCommanderPrompt({ cwd, goal, docs, config, modelLabel, commanderId = '' }) {
-  const snapshot = docs.snapshot
-  const part = (title, body) => `### ${title}\n\n\`\`\`markdown\n${body.trim().length > 0 ? body.trim() : '（空）'}\n\`\`\`\n`
-  return [
-    '你是「指挥员」：长线项目中唯一的、长期在线的中层设计师与督察指挥官。',
-    `你的身份是 Agent Teams teammate（名字 "${config.commanderName}"），Lead 会用 send_message 找你；你也可以用 send_message({ target: "lead" }) 找 Lead。你会被多轮对话复用，不要创建子agent。`,
-    '',
-    '## 职责与边界',
-    '- 依据文档与项目事实，判断：当前完成到什么程度、项目整体目的与边界是什么、下一步具体该做什么。',
-    '- **设计架构与功能铺展**：从用户意图推导完整使用流程、模块边界、数据流、扩展点与实现顺序；需求模糊时按最可能意图做功能增量（补哪些能力、用户价值、实现路径、验收方式），不要只复述或反复追问。',
-    '- **完善性职责**：主动发现体验/边界/一致性缺口并给出可执行的补全建议；区分必须补全项与可选后续，不无限扩大范围。',
-    '- 你可以读**整个工作区**（不只 doc/）：read / glob / grep / read_image 都能用；文件沙箱不限制你读取工作区外的路径。`doc/` 只是摘要与计划，**权威事实以仓库真实文件为准**。',
-    '- 你可以运行**只读 shell**（若工具可用）：只允许查看类命令（git status/log/diff、rg、Get-ChildItem、Get-Content、Select-String 等）；写文件、改仓库、编译/构建、下载与解释器命令都会被拦截。',
-    '- 你有写文件（write / edit）权限，但**默认不要动手**：实现、改代码、跑改动都交给工程组；只有维护 doc/plan.md、doc/agent.md 这类指挥留痕时才写，写完立刻回到指挥判断，不要因写文件分散注意力。',
-    '- **大多数问题自己决定**：依据 doc/suggest.md 与用户已有需求做取舍，保留最大建议/决策空间；不要等用户逐条确认，也不要用提问代替判断。只有真正会改变用户需求/产品语义且无法判断的事项，才用 `send_message({ target: "lead" })` 说明取舍与推荐供 Lead 决策。',
-    '- 你是长期在线的指挥循环，会被多轮询问：善用上下文记忆，不必重复已完成的大范围核对。',
-    '- **工程组 / Agent Teams / 其他子agent 才是执行主体**：下一步建议必须写清每条交给谁（哪个工程组、哪个子agent、还是主agent），不要把全部工作都压给主agent自己。',
-    '- 不要建议「暂停 goal」「等用户确认」「等指令」或「先停下」，除非用户明确要求；有不确定就给出可执行推荐方案。',
-    '',
-    '## 本轮输入',
-    `- 项目根目录：${cwd}`,
-    `- 你的会话 id：${commanderId || '（由宿主分配）'}`,
-    `- 当前指挥轮次：第 ${docs.round} 轮`,
-    `- 本轮时间：${nowText()}`,
-    `- 会话 goal（只读，你不能修改它）：${goal && goal.objective ? goal.objective : '（当前会话没有 goal）'}`,
-    `- 宿主为指挥员选择的模型：${modelLabel}`,
-    '',
-    '## 文档快照（摘要，可能过时；权威事实请直接读仓库文件）',
-    `文档路径：${Object.values(docs.paths).map((file) => `\`${file}\``).join('、')}`,
-    '',
-    part('doc/suggest.md（用户建议板：仅用户编写，每轮必读，优先级最高）', snapshot.suggest),
-    part('doc/agent.md（设计导向：编辑行为分化与设计方向）', snapshot.agent),
-    part('doc/plan.md（当前计划：最新一轮）', snapshot.plan),
-    part('doc/history.md（主agent行动历史：最新若干条）', snapshot.history),
-    '## 侦察要求',
-    '1. 先用 glob / grep / read 核对项目真实状态：计划中的步骤是否完成、关键文件是否存在、测试/构建是否可验证。',
-    '2. history 与 plan 可能过时或与现状冲突；以仓库事实为准，并指出偏差。',
-    '3. 如果 doc/suggest.md 的建议与历史计划冲突，以用户建议为最高优先级调整建议。',
-    '4. 不要臆测未检查的结论；无法证实的部分明确标注「未验证」。',
-    '5. 你会在同一会话中被反复询问：善用上下文里的历史，不重复已完成的大范围核对。',
-    '',
-    '## 输出要求（自由对话）',
-    '- 直接回答，用 Markdown；不要输出 JSON 结论块。',
-    '- **大多数问题自己决定**：依据 doc/suggest.md 与用户原始需求做取舍，不要等 Lead 或用户逐条确认。',
-    '- 只有真正会改变用户需求或产品语义、且无法从现有材料判断的事项，才用 `send_message({ target: "lead" })` 说明取舍与推荐，让 Lead 决策；不要用提问代替判断。',
-    '- 回答要具体、可执行；不要重复已经核对过的事实，除非 Lead 要求。',
-    '',
-    '## 指挥员契约',
-    COMMANDER_CONTRACT,
-  ].join('\n')
-}
 
 
 
@@ -1635,6 +1526,33 @@ export function apply(ctx, rawConfig = {}) {
   const HANDOFF_WAIT_MS = 20 * 60 * 1000
   const HANDOFF_POLL_MS = 30 * 1000
 
+  const handoffDriver = createHandoffDriver({
+    ctx,
+    t,
+    waitMs: HANDOFF_WAIT_MS,
+    pollMs: HANDOFF_POLL_MS,
+    waitCommander: (...args) => waitCommander(...args),
+    commanderMember,
+    commanderDead,
+    currentTakeover,
+    commanderIds,
+    sendToCommander: (...args) => sendToCommander(...args),
+    resolveCwd,
+    currentGoalObjective,
+    clearPending: (...args) => clearPending(...args),
+    loadPending: (...args) => loadPending(...args),
+    rootSessionIdOf,
+  })
+  const driveHandoff = handoffDriver.driveHandoff
+  const requestHandoffDrive = handoffDriver.requestHandoffDrive
+  const waitCommanderGuarded = handoffDriver.waitCommanderGuarded
+  const wakeWithInstruction = handoffDriver.wakeWithInstruction
+  const summarizeTools = handoffDriver.summarizeTools
+  const lastTurnStartSeq = handoffDriver.lastTurnStartSeq
+  const lastAssistantText = handoffDriver.lastAssistantText
+  const assistantTextOfContent = handoffDriver.assistantTextOfContent
+
+
   function handoffStateFor(agent) {
     const existing = handoffStates.get(agent.id)
     if (existing !== undefined) return existing
@@ -1666,231 +1584,7 @@ export function apply(ctx, rawConfig = {}) {
     }
   }
 
-  /**
-   * 等指挥员回复，但带看门狗：它挂死/超时就停运，不无限挂着。
-   * @returns {{kind: string, text?: string}} waitCommander 的原结果，或 {kind:'dead'|'timeout'}
-   */
-  async function waitCommanderGuarded(agent, requestId) {
-    let settled = false
-    const startedAt = Date.now()
-    const watchdog = (async () => {
-      while (!settled) {
-        await new Promise((done) => {
-          const timer = setTimeout(done, HANDOFF_POLL_MS)
-          timer.unref?.()
-        })
-        if (settled) return undefined
-        if (commanderDead(commanderMember(agent))) return { kind: 'dead' }
-        if (Date.now() - startedAt > HANDOFF_WAIT_MS) return { kind: 'timeout' }
-      }
-      return undefined
-    })()
-    try {
-      return await Promise.race([waitCommander(agent, requestId), watchdog])
-    } finally {
-      settled = true
-    }
-  }
 
-  /** 把指挥员的指令注入回主agent，并唤醒它开新一轮。 */
-  function wakeWithInstruction(agent, text, commanderId) {
-    const base = {
-      role: 'user',
-      id: `commander-handoff-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
-      content: [{ type: 'text', text: renderInstruction(text, t) }],
-    }
-    try {
-      agent.followup({ ...base, source: { ...HANDOFF_SOURCE, senderSessionId: commanderId } })
-      return true
-    } catch (error) {
-      // senderSessionId 缺失/不合法时退回 runtime-context：语义弱一点，但能送达。
-      try {
-        agent.followup({ ...base, source: { kind: 'runtime-context' } })
-        return true
-      } catch (fallbackError) {
-        ctx.logger?.warn?.(
-          `dsh-commander: 自动交接唤醒失败：${fallbackError && fallbackError.message ? fallbackError.message : fallbackError}`,
-        )
-        return false
-      }
-    }
-  }
-
-  /**
-   * 本轮工具摘要：把 `tool/call` 与 `tool/result` 配成一行一条。
-   *
-   * 只给指挥员看「干了什么、成没成」，参数截断到 60 字——它要判断方向，
-   * 不需要重读全部输出。
-   */
-  function summarizeTools(session, fromSeq) {
-    let events = []
-    try {
-      events = typeof session?.snapshotEvents === 'function' ? session.snapshotEvents(fromSeq) : []
-    } catch {
-      events = []
-    }
-    const calls = new Map()
-    const rows = []
-    for (const event of events) {
-      if (event?.type === 'tool/call') {
-        const callId = event.data?.callId
-        const name = String(event.data?.name ?? 'tool')
-        const args = String(event.data?.arguments ?? '')
-        const row = { name, args, failed: undefined }
-        if (callId !== undefined) calls.set(callId, row)
-        rows.push(row)
-        continue
-      }
-      if (event?.type === 'tool/result') {
-        const row = calls.get(event.data?.callId)
-        if (row !== undefined) row.failed = Boolean(event.error) || event.data?.message?.isError === true
-      }
-    }
-    return rows
-      .filter((row) => row.failed !== undefined || row.args.length > 0)
-      .map((row) => {
-        const compact = row.args.replace(/\s+/g, ' ').trim()
-        const shown = compact.length > 60 ? `${compact.slice(0, 60)}…` : compact
-        const mark = row.failed === undefined ? '…' : row.failed ? '✗' : '✓'
-        return `${mark} ${row.name}${shown.length > 0 ? `: ${shown}` : ''}`
-      })
-  }
-
-  /** 本轮起点：最后一个 turn/start 的 seq。用来把摘要/输出限定在本轮。 */
-  function lastTurnStartSeq(session) {
-    let seq = 0
-    try {
-      const events = session?.ownEvents?.() ?? []
-      // 从后往前找：长会话每轮都全量扫描是浪费。
-      for (let index = events.length - 1; index >= 0; index -= 1) {
-        const event = events[index]
-        if (event?.type === 'turn/start' && typeof event.seq === 'number') {
-          seq = event.seq
-          break
-        }
-      }
-    } catch {
-      seq = 0
-    }
-    return seq
-  }
-
-  async function driveHandoff(state) {
-    const agent = state.agent
-    const header = agent?.session?.header
-    const isLead = Boolean(header) && !header.parentSession && !commanderIds.has(agent.id)
-    const takeoverState = currentTakeover(agent).state
-    const ready = shouldHandoff({
-      stopping: state.stopping,
-      inFlight: state.inFlight,
-      isLead,
-      takeover: takeoverState,
-      status: agent.status,
-      turnEnded: state.turnEnded,
-      stopped: state.stopped,
-      interrupted: state.interrupted,
-    })
-    if (!ready) {
-      // 记下到底哪一条没过——排查不靠猜。
-      state.lastSkip = `stopping=${state.stopping} inFlight=${state.inFlight} isLead=${isLead} takeover=${takeoverState} status=${agent.status} turnEnded=${state.turnEnded} stopped=${state.stopped} interrupted=${state.interrupted}`
-      // 用户刚插过话：只跳过这一轮，状态不动。
-      if (state.interrupted) state.interrupted = false
-      return
-    }
-    // 一次 turn/end 只交接一次。
-    state.turnEnded = false
-    const session = agent.session
-    // 只看本轮：lastSeq 在插件重载后是 0，不限窗口会把整个会话的工具都摘要一遍。
-    const fromSeq = Math.max(state.lastSeq, lastTurnStartSeq(session))
-    const report = lastAssistantText(session, fromSeq, state.lastAt)
-    const tools = summarizeTools(session, fromSeq)
-    state.lastSeq = session?.seq ?? 0
-    state.lastAt = Date.now()
-    if (report.trim().length === 0 && tools.length === 0) {
-      state.lastSkip = '本轮没有可见输出也没有工具调用'
-      return
-    }
-    state.inFlight = true
-    try {
-      // sendToCommander 底层的 team 服务会校验 AbortSignal，传 undefined 会抛
-      // 「signals[0] is not of type AbortSignal」——这里自带一个。
-      const signal = new AbortController().signal
-      const cwd = await resolveCwd(ctx, agent, signal).catch(() => process.cwd())
-      const task = currentGoalObjective(agent)
-      const sent = await sendToCommander(agent, undefined, renderReport({ report, task, tools, t }), signal, cwd)
-      const result = await waitCommanderGuarded(agent, sent?.requestId)
-      const outcome = afterWait({ kind: result?.kind, interrupted: state.interrupted, stopping: state.stopping })
-      // 该清的 pending 一定要清：dead/timeout/让位都会留下脏记录。
-      if (outcome.clearPending) await clearPending(rootSessionIdOf(agent)).catch(() => {})
-      if (outcome.stopped) state.stopped = true
-      if (outcome.action === 'stop') {
-        state.interrupted = false
-        ctx.logger?.warn?.(`dsh-commander: 自动交接停止（${result?.kind ?? 'unknown'}）`)
-        return
-      }
-      if (outcome.action === 'let-go') {
-        state.interrupted = false
-        ctx.logger?.info?.('dsh-commander: 等回复期间用户插话，本次交接让位')
-        return
-      }
-      const verdict = classifyReply(result.text)
-      if (verdict === 'finish') {
-        ctx.logger?.info?.('dsh-commander: 自动交接收到「允许结束」，停止驱动')
-        return
-      }
-      const pending = await loadPending(rootSessionIdOf(agent)).catch(() => undefined)
-      wakeWithInstruction(agent, result.text, pending?.commanderId ?? '')
-    } catch (error) {
-      state.lastError = `drive: ${error && error.message ? error.message : error}`
-      ctx.logger?.warn?.(`dsh-commander: 自动交接失败：${state.lastError}`)
-    } finally {
-      state.inFlight = false
-      state.lastDriveAt = Date.now()
-    }
-  }
-
-  /** 同一个 agent 的驱动串行化（照 goal-round-driver 的骨架）。 */
-  function requestHandoffDrive(state) {
-    if (state.stopping) return
-    state.requested = true
-    if (state.run !== undefined) return
-    let run
-    try {
-      // `withoutInitiator` 只是归因卫生：拿不到就直连，别为它把整条交接断掉。
-      // （`ctx.agents` 是必须 inject 的服务，本插件没 inject 它，所以这里只能 ctx.get。）
-      let agentsService
-      try {
-        agentsService = ctx.get('agents')
-      } catch {
-        agentsService = undefined
-      }
-      const body = async () => {
-        while (state.requested && !state.stopping) {
-          state.requested = false
-          try {
-            await driveHandoff(state)
-          } catch (error) {
-            state.lastError = error && error.message ? error.message : String(error)
-            ctx.logger?.warn?.(`dsh-commander: 交接驱动异常：${state.lastError}`)
-          }
-        }
-      }
-      run =
-        typeof agentsService?.withoutInitiator === 'function'
-          ? agentsService.withoutInitiator(body)
-          : body()
-    } catch (error) {
-      state.lastError = `drive start: ${error && error.message ? error.message : error}`
-      state.requested = false
-      return
-    }
-    state.run = run
-    const retire = () => {
-      state.run = undefined
-      if (state.requested && !state.stopping) requestHandoffDrive(state)
-    }
-    run.then(retire, retire)
-  }
 
   ctx.effect(function* () {
     ctx.on('agent/status', ({ agent, status }) => {
@@ -2145,31 +1839,6 @@ export function apply(ctx, rawConfig = {}) {
     else approvedSessions.delete(agent.id)
   }
 
-  function assistantTextOfContent(content) {
-    if (!Array.isArray(content)) return ''
-    return content
-      .filter((block) => block && block.type === 'text' && typeof block.text === 'string')
-      .map((block) => block.text)
-      .join('\n')
-      .trim()
-  }
-
-  function lastAssistantText(session, fromSeq, sinceTime = 0) {
-    let events = []
-    try {
-      events = typeof session?.snapshotEvents === 'function' ? session.snapshotEvents(fromSeq) : session?.events ?? []
-    } catch {
-      events = session?.events ?? []
-    }
-    let text = ''
-    for (const event of events) {
-      if (event?.type !== 'assistant/message') continue
-      if (typeof event.time === 'number' && event.time < sinceTime) continue
-      const candidate = assistantTextOfContent(event.data?.message?.content)
-      if (candidate.length > 0) text = candidate
-    }
-    return text
-  }
 
   function isDescendantSession(session, leadId) {
     let current = session
@@ -2467,386 +2136,43 @@ export function apply(ctx, rawConfig = {}) {
 
   /** 指挥状态摘要（不派生 LLM）。 */
   // ---- 受控检查（checks）：只执行配置里列出的命令 ----
-  const CHECK_MAX_LINES = 200
-  const CHECK_MAX_BYTES = 32 * 1024
-  let checkRunning = false
+  // ---- 受控检查（checks）：实现在 checks.js，这里只注入依赖 ----
+  const checks = createChecks({ t, config })
+  const checkCatalog = checks.catalog
+  const runChecks = checks.runChecks
 
-  /** 解析 `checkCommands`：`name = command` 或直接 command。 */
-  function checkCatalog() {
-    return (config.checkCommands ?? [])
-      .map((entry) => String(entry ?? '').trim())
-      .filter((entry) => entry.length > 0)
-      .map((entry) => {
-        const named = /^([A-Za-z0-9_.:-]+)\s*=\s*(.+)$/.exec(entry)
-        if (named) return { name: named[1], command: named[2].trim() }
-        const words = entry.split(/\s+/).slice(0, 2).join(' ')
-        return { name: words, command: entry }
-      })
-  }
-
-  /** 截断输出：保留末尾若干行/字节。 */
-  function tailText(text, maxLines, maxBytes) {
-    let value = String(text ?? '')
-    let truncated = false
-    if (Buffer.byteLength(value, 'utf8') > maxBytes) {
-      value = value.slice(-maxBytes)
-      truncated = true
-    }
-    const lines = value.split(/\r?\n/)
-    if (lines.length > maxLines) {
-      value = lines.slice(-maxLines).join('\n')
-      truncated = true
-    }
-    return { text: value, truncated }
-  }
-
-  /** 杀掉整棵进程树：POSIX 用进程组，Windows 用 taskkill /T。 */
-  function killTree(child) {
-    if (!child?.pid) return
-    if (process.platform === 'win32') {
-      try {
-        spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' }).unref?.()
-      } catch {
-        try {
-          child.kill('SIGKILL')
-        } catch {
-          // 忽略
-        }
-      }
-      return
-    }
-    try {
-      process.kill(-child.pid, 'SIGKILL')
-    } catch {
-      try {
-        child.kill('SIGKILL')
-      } catch {
-        // 忽略
-      }
-    }
-  }
-
-  /** 执行一条受控检查。 */
-  function spawnCheck(item, cwd) {
-    return new Promise((resolvePromise) => {
-      const startedAt = Date.now()
-      let stdout = ''
-      let stderr = ''
-      let timedOut = false
-      let settled = false
-      const child = spawn(item.command, {
-        cwd,
-        shell: true,
-        detached: process.platform !== 'win32',
-        env: process.env,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      })
-      const timer = setTimeout(() => {
-        timedOut = true
-        killTree(child)
-      }, config.checkTimeoutMs)
-      const collect = (chunk, target) => {
-        const text = String(chunk)
-        const combined = target + text
-        // 只保留尾部，避免长输出吃内存
-        return combined.length > CHECK_MAX_BYTES * 2 ? combined.slice(-CHECK_MAX_BYTES * 2) : combined
-      }
-      child.stdout?.on('data', (chunk) => {
-        stdout = collect(chunk, stdout)
-      })
-      child.stderr?.on('data', (chunk) => {
-        stderr = collect(chunk, stderr)
-      })
-      const finish = (exitCode, error) => {
-        if (settled) return
-        settled = true
-        clearTimeout(timer)
-        const merged = [stdout.trim(), stderr.trim()].filter((part) => part.length > 0).join('\n')
-        const tail = tailText(merged, CHECK_MAX_LINES, CHECK_MAX_BYTES)
-        resolvePromise({
-          item,
-          exitCode,
-          timedOut,
-          durationMs: Date.now() - startedAt,
-          output: tail.text,
-          truncated: tail.truncated,
-          error: error ? (error?.message ?? String(error)) : undefined,
-        })
-      }
-      child.on('error', (error) => finish(undefined, error))
-      child.on('close', (code) => finish(code ?? (timedOut ? undefined : 1)))
-    })
-  }
-
-  /** commander(action=checks)：运行/列出受控检查。 */
-  async function runChecks(agent, cwd, requested) {
-    const catalog = checkCatalog()
-    if (catalog.length === 0) return { kind: 'empty', text: t('checks.empty') }
-    if (!requested) {
-      const items = catalog.map((row) => `- ${row.name}：\`${row.command}\``).join('\n')
-      return { kind: 'list', text: t('checks.list', { items }) }
-    }
-    const item = catalog.find((row) => row.name === requested)
-    if (!item) {
-      return {
-        kind: 'unknown',
-        text: t('checks.unknown', { name: requested, names: catalog.map((row) => row.name).join('、') }),
-      }
-    }
-    if (checkRunning) return { kind: 'busy', text: t('checks.busy') }
-    checkRunning = true
-    try {
-      const result = await spawnCheck(item, cwd)
-      const status = result.timedOut
-        ? t('checks.timeout', { limit: Math.round(config.checkTimeoutMs / 1000) })
-        : result.exitCode === 0
-          ? 'PASS'
-          : 'FAIL'
-      const head = t('checks.result', {
-        name: item.name,
-        status,
-        exitCode: result.exitCode ?? '—',
-        duration: `${(result.durationMs / 1000).toFixed(1)}s`,
-      })
-      const parts = [head]
-      if (result.truncated) {
-        parts.push(t('checks.truncated', { lines: CHECK_MAX_LINES, bytes: CHECK_MAX_BYTES }))
-      }
-      if (result.output.length > 0) parts.push('```\n' + result.output + '\n```')
-      return {
-        kind: result.timedOut ? 'timeout' : result.exitCode === 0 ? 'pass' : 'fail',
-        text: parts.join('\n'),
-        exitCode: result.exitCode,
-        timedOut: result.timedOut,
-        durationMs: result.durationMs,
-      }
-    } finally {
-      checkRunning = false
-    }
-  }
-
-  // ---- doctor：一条命令说清"现在是健康还是哪里断了" ----
+  // ---- doctor：实现在 doctor.js，这里只注入依赖 ----
   const PLUGIN_DIR = (() => {
     try {
-      return fileURLToPath(new URL('.', import.meta.url))
+      return fileURLToPath(new URL(".", import.meta.url))
     } catch {
       return undefined
     }
   })()
-
-  /** 扫描 profile：`~/.dsh/profiles/<name>/node_modules/@local/dsh-commander` 指向哪里。 */
-  async function profileMounts() {
-    const roots = []
-    const profilesDir = join(homedir(), '.dsh', 'profiles')
-    let names = []
-    try {
-      names = await fsp.readdir(profilesDir)
-    } catch {
-      return roots
-    }
-    for (const name of names) {
-      const link = join(profilesDir, name, 'node_modules', '@local', 'dsh-commander')
-      try {
-        const real = await fsp.realpath(link)
-        roots.push({ profile: name, path: real })
-      } catch {
-        // 未安装
-      }
-    }
-    return roots
-  }
-
-  /** 读某个目录下 package.json 的版本（读不到返回 undefined）。 */
-  async function packageVersionAt(dir) {
-    if (!dir) return undefined
-    try {
-      const raw = await fsp.readFile(join(dir, 'package.json'), 'utf8')
-      const parsed = JSON.parse(raw)
-      return typeof parsed?.version === 'string' ? parsed.version : undefined
-    } catch {
-      return undefined
-    }
-  }
-
-  /** commander(action=doctor)：PASS/WARN/FAIL 自检，默认只读。 */
-  async function doctorReport(agent, cwd, options = {}) {
-    const rows = []
-    const add = (level, title, detail) => rows.push({ level, title, detail })
-    const suggestions = []
-
-    // 1) 版本与安装
-    const mounts = await profileMounts()
-    const diskVersion = await packageVersionAt(PLUGIN_DIR)
-    let installDetail = `目录 ${PLUGIN_DIR ?? '未知'}，运行中 ${PLUGIN_VERSION}`
-    if (diskVersion && diskVersion !== PLUGIN_VERSION) {
-      installDetail += `，磁盘 package ${diskVersion}（重启后生效）`
-    }
-    const mountVersions = []
-    for (const mount of mounts) mountVersions.push(await packageVersionAt(mount.path))
-    const versionDrift = mounts.filter((_row, index) => mountVersions[index] && mountVersions[index] !== PLUGIN_VERSION)
-    if (mounts.length === 0) {
-      add('WARN', '安装', `${installDetail}；没有找到任何 profile 挂载（可能通过其他方式加载）`)
-    } else {
-      const normalized = (value) => String(value ?? '').replace(/[\\/]+$/, '').toLowerCase()
-      const mismatched = mounts.filter((row) => normalized(row.path) !== normalized(PLUGIN_DIR))
-      if (mismatched.length > 0) {
-        add(
-          'FAIL',
-          '安装',
-          `${installDetail}；但 profile ${mismatched
-            .map((row) => `${row.profile} → ${row.path}`)
-            .join('、')} 指向别的目录，运行的不是这份代码`,
-        )
-        suggestions.push(t('doctor.suggest.mount'))
-      } else if (versionDrift.length > 0 || (diskVersion && diskVersion !== PLUGIN_VERSION)) {
-        // 目录一致但版本不一致：说明改了代码/换了包还没重启 —— 配置期望未满足，不是故障。
-        add(
-          'WARN',
-          '安装',
-          `${installDetail}；profile ${mounts.map((row) => row.profile).join('、')} 指向同一目录，但版本不一致（进程仍在跑旧代码，重启后生效）`,
-        )
-      } else {
-        add('PASS', '安装', `${installDetail}；profile ${mounts.map((row) => row.profile).join('、')} 指向同一目录且版本一致`)
-      }
-    }
-
-    // 2) 运行态
-    let teammate
-    try {
-      const members = teamService().listMembers(agent)
-      teammate = (Array.isArray(members) ? members : []).find(
-        (member) => member.role === 'teammate' && member.name === config.commanderName,
-      )
-    } catch {
-      teammate = undefined
-    }
-    const goal = (() => {
+  const doctor = createDoctor({
+    t,
+    config,
+    pluginDir: PLUGIN_DIR,
+    pluginVersion: PLUGIN_VERSION,
+    teamService,
+    getGoal: (agent) => {
       try {
         return ctx.get('goals')?.get?.(agent)
       } catch {
         return undefined
       }
-    })()
-    add(
-      teammate ? 'PASS' : 'WARN',
-      '成员',
-      teammate
-        ? `${teammate.name}（${teammate.status ?? 'unknown'}，session=${teammate.id}）`
-        : '尚未创建；用 /commander start 或直接发需求',
-    )
-    add(
-      'PASS',
-      'goal',
-      goal ? `${goal.phase}（rounds ${goal.roundsStarted}/${goal.maxGoalRounds}）` : '当前会话没有 goal（正常）',
-    )
-
-    // 3) 持久化
-    const persist = await persistenceFacts()
-    const stateRows = []
-    stateRows.push(persist.snapshot.exists ? `存在 ${persist.store.path}` : `未创建 ${persist.store.path}`)
-    stateRows.push(`mode ${process.platform === 'win32' ? '不适用（Windows）' : (persist.mode ?? '未知')}`)
-    stateRows.push(
-      `表 ${STATE_TABLES.map((name) => `${name} ${persist.counts[name] ?? 0}`).join('，')}`,
-    )
-    if (persist.snapshot.lastWriteAt) {
-      stateRows.push(`上次写入 ${new Date(persist.snapshot.lastWriteAt).toLocaleString(config.locale || 'zh-CN', { hour12: false })}`)
-    }
-    let writable = false
-    try {
-      await fsp.access(dirname(persist.store.path), 2)
-      writable = true
-    } catch {
-      writable = false
-    }
-    stateRows.push(writable ? '可写 yes' : '可写 no')
-    if (persist.snapshot.readError) stateRows.push(`读错误 ${persist.snapshot.readError}`)
-    if (persist.snapshot.writeError) stateRows.push(`写错误 ${persist.snapshot.writeError}`)
-    const persistLevel = !writable || persist.snapshot.writeError
-      ? 'FAIL'
-      : persist.snapshot.readError
-        ? 'WARN'
-        : persist.mode && persist.mode !== '600' && persist.mode !== '0600' && process.platform !== 'win32'
-          ? 'WARN'
-          : 'PASS'
-    add(persistLevel, '持久化', stateRows.join('｜'))
-    if (persist.snapshot.brokenFile) suggestions.push(t('doctor.suggest.stateBroken', { path: persist.snapshot.brokenFile }))
-    if (persist.snapshot.lockBusy) suggestions.push(t('doctor.suggest.stateLock', { path: persist.store.lockPath }))
-    if (persistLevel === 'WARN' && persist.mode && process.platform !== 'win32') suggestions.push(t('doctor.suggest.perm'))
-
-    // 4) 门禁
-    const leadId = agent?.session?.header?.id ?? agent?.id
-    const gateOpen = consultedSinceUser.get(leadId) === true
-    const takeoverNow = currentTakeover(agent)
-    add('PASS', t('label.takeover'), takeoverLine(agent))
-    add(
-      'PASS',
-      '问用户门禁',
-      requiresConsultBeforeAsking(takeoverNow.state)
-        ? gateOpen
-          ? '全接管，但本轮已咨询（可问用户）'
-          : '全接管：问用户前必须先 commander say + wait'
-        : '不拦（当前接管状态不需要先咨询）',
-    )
-
-    // 5) UI 组件
-    const windowText = uiWindowText()
-    const windowMounted = windowText.startsWith('已挂载')
-    // 未挂载只是「配置期望未满足」，不影响对话；只有真故障才 FAIL。
-    const windowLevel = windowMounted ? 'PASS' : config.expectTranscriptWindow === true ? 'WARN' : 'PASS'
-    add(windowLevel, '历史窗口', windowText)
-    if (windowLevel === 'WARN') suggestions.push(t('doctor.suggest.window'))
-
-    // 6) 环境
-    let codeState
-    try {
-      codeState = await computeCodeState(cwd)
-    } catch {
-      codeState = '（无法计算）'
-    }
-    const checks = checkCatalog().length
-    let commit = ''
-    try {
-      commit = await describeGitHead(cwd)
-    } catch {
-      commit = ''
-    }
-    add(
-      'PASS',
-      '环境',
-      `cwd ${cwd}｜CODE_STATE ${codeState}${commit ? `｜提交 ${commit}（不绑定）` : ''}｜检查项 ${checks} 条`,
-    )
-
-    // 7) --fix
-    const fixes = []
-    if (options.fix === true) {
-      const applied = await persist.store.fixPerms()
-      fixes.push(...applied)
-      const removed = persist.store.prune()
-      if (removed > 0) fixes.push(`修剪 ${removed} 条历史记录`)
-      await persist.store.flush()
-    }
-
-    const fails = rows.filter((row) => row.level === 'FAIL').length
-    const warns = rows.filter((row) => row.level === 'WARN').length
-    const out = [`## ${t('doctor.title')}`, '']
-    for (const row of rows) {
-      out.push(`- ${row.level} ${row.title}：${row.detail}`)
-    }
-    out.push('')
-    out.push(
-      fails > 0
-        ? t('doctor.conclusionFail', { count: fails })
-        : warns > 0
-          ? t('doctor.conclusionWarn', { count: warns })
-          : t('doctor.conclusionOk'),
-    )
-    if (suggestions.length > 0) {
-      out.push(...suggestions.map((item) => `- 下一步：${item}`))
-    }
-    if (fixes.length > 0) out.push(`- ${t('doctor.fix.applied', { items: fixes.join('，') })}`)
-    out.push('', 'First time, or unsure of the flow: `commander(action="help")` for the manual.')
-    return { text: out.join('\n'), fails, warns }
-  }
+    },
+    persistenceFacts,
+    currentTakeover,
+    takeoverLine,
+    requiresConsultBeforeAsking,
+    consultedSinceUser,
+    uiWindowText: (...args) => uiWindowText(...args),
+    checkCatalog,
+  })
+  const doctorReport = doctor.doctorReport
+  const profileMounts = doctor.profileMounts
+  const packageVersionAt = doctor.packageVersionAt
 
   /** UI 历史窗口状态：默认关闭不算故障。 */
   function uiWindowText() {
