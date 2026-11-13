@@ -41,7 +41,7 @@ import { createTranslator, localeKeyDiff } from './messages.js'
 import { classifyReply, commanderDead, HANDOFF_SOURCE, renderInstruction, renderReport, shouldHandoff } from './handoff.js'
 
 /** 运行时版本标记：status 里显示，用来确认当前进程加载的是哪一版代码（HMR 是否生效）。 */
-const PLUGIN_VERSION = '2.9.26'
+const PLUGIN_VERSION = '2.9.27'
 
 /** 从 DSH 安装目录加载 schemastery；失败时插件仍可运行，只是 Plugin Manager 不显示 Config。 */
 function loadSchemaLib() {
@@ -1787,6 +1787,12 @@ export function apply(ctx, rawConfig = {}) {
       const sent = await sendToCommander(agent, undefined, renderReport({ report, task, tools }), undefined, cwd)
       const result = await waitCommanderGuarded(agent, sent?.requestId)
       if (state.stopping) return
+      // 等回复期间用户插话了：方向盘已经交还给用户，这条指令不再注入。
+      if (state.interrupted) {
+        state.interrupted = false
+        ctx.logger?.info?.('dsh-commander: 等回复期间用户插话，本次交接让位')
+        return
+      }
       // 指挥员挂死 / 超时：停运即可，不无限挂着，也不改接管状态。
       if (result?.kind === 'dead' || result?.kind === 'timeout') {
         state.stopped = true
@@ -1850,9 +1856,11 @@ export function apply(ctx, rawConfig = {}) {
     ctx.on('session/event', (session, event) => {
       const agent = ctx.get('agents')?.get?.(session.id)
       if (!agent || agent.session !== session) return
-      // 用户发言或中断：这一轮不交接，方向盘交还给用户；接管状态不变。
+      // 用户发言：只有「正在等指挥员回复」时才算是抢占方向盘。
+      // 平时用户发言是这一轮的开始，不是打断——不能因此跳过交接。
       if (event?.type === 'user/message' && event.data?.source?.kind === 'user') {
-        handoffStateFor(agent).interrupted = true
+        const state = handoffStateFor(agent)
+        if (state.inFlight) state.interrupted = true
         return
       }
       if (event?.type === 'turn/end') {
