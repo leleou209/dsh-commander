@@ -50,14 +50,20 @@ export function classifyReply(text) {
   return 'continue'
 }
 
-/** 交给指挥员的那段话：本轮输出 + 当前任务 + 代码状态。 */
+/** 交给指挥员的那段话：本轮输出 + 当前任务 + 工具摘要 + 代码状态。 */
 export function renderReport(input = {}) {
   const report = String(input.report ?? '').trim()
   const task = String(input.task ?? '').trim()
   const codeState = input.codeState ? String(input.codeState) : ''
+  const tools = Array.isArray(input.tools) ? input.tools.filter((row) => String(row ?? '').trim().length > 0) : []
   const lines = ['[自动交接] 主agent 已停下，以下是它本轮的最后输出。', '']
   if (task.length > 0) lines.push(`当前任务：${task}`, '')
-  lines.push(report.length > 0 ? report : '（本轮没有可见输出）', '', '请给下一步指令：继续 / 需澄清 / 允许结束。')
+  lines.push(report.length > 0 ? report : '（本轮没有可见输出）')
+  if (tools.length > 0) {
+    lines.push('', '本轮工具：')
+    for (const row of tools.slice(0, 16)) lines.push(`- ${row}`)
+  }
+  lines.push('', '请给下一步指令：继续 / 需澄清 / 允许结束。')
   if (codeState.length > 0) lines.push('', `代码状态：${codeState}`)
   return lines.join('\n')
 }

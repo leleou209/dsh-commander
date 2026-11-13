@@ -2,6 +2,12 @@
 
 版本号与 `package.json` / `index.js` 里的 `PLUGIN_VERSION` 一致；`/commander status` 首行显示运行中的版本。
 
+## 2.9.25
+
+- **交接汇报带上工具摘要**：`summarizeTools()` 把本轮的 `tool/call` + `tool/result` 配成一行一条（`✓/✗ 名字: 参数前 60 字`，最多 16 行）塞进交给指挥员的汇报。之前只有最后一段文本，指挥员每轮都在盲判，得自己跑 `status`/`checks` 才知道改了什么。
+- **只读 shell 白名单补 `grep` 一族**：名单里有 `rg` 却没有 `grep`/`egrep`/`fgrep`，指挥员真撞上过；顺带补 `which`/`where`/`column`/`od`/`xxd`/`hostname`/`true`/`false`。
+- **澄清一条误报**：指挥员上次汇报说"管道拆分不感知引号（`Select-String -Pattern 'a|b'` 会被拆段拒绝）"——实测是**误判**，`splitUnquotedCommands()` 一直是引号感知的。它当时撞上的是 `grep` 不在白名单。现在加了回归断言锁住：引号内的 `|` 放行、真实管道仍逐段校验、`Get-Content a.txt | Set-Content b.txt` 仍被拒。
+
 ## 2.9.24
 
 自动交接的健壮性补强（A 组五条）。

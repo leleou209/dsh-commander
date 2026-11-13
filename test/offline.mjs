@@ -389,10 +389,15 @@ for (const cmd of [
   'stat index.js',
   'date +%s',
   'sed -n 1,5p index.js',
+  // 引号里的 | 是数据不是管道（指挥员反馈过一次误判，这里锁住）
+  "Select-String -Path index.js -Pattern 'a|b'",
+  'grep "a|b" index.js',
+  'Get-Content index.js | Select-String -Pattern foo',
+  'Get-ChildItem -Recurse | Where-Object { $_.Name -eq "x" }',
 ]) {
   assert.equal(guard({ agent: teammateAgent, name: 'pwsh', arguments: { command: cmd } }), undefined, cmd + ' 应放行')
 }
-for (const cmd of ['node -e "1"', 'sed -i s/a/b/ index.js', 'git -C . commit -m x']) {
+for (const cmd of ['node -e "1"', 'sed -i s/a/b/ index.js', 'git -C . commit -m x', 'Get-Content a.txt | Set-Content b.txt']) {
   assert.ok(
     String(guard({ agent: teammateAgent, name: 'pwsh', arguments: { command: cmd } })).includes('只读'),
     cmd + ' 应被拒绝',

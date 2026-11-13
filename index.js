@@ -41,7 +41,7 @@ import { createTranslator, localeKeyDiff } from './messages.js'
 import { classifyReply, commanderDead, HANDOFF_SOURCE, renderInstruction, renderReport, shouldHandoff } from './handoff.js'
 
 /** 运行时版本标记：status 里显示，用来确认当前进程加载的是哪一版代码（HMR 是否生效）。 */
-const PLUGIN_VERSION = '2.9.24'
+const PLUGIN_VERSION = '2.9.25'
 
 /** 从 DSH 安装目录加载 schemastery；失败时插件仍可运行，只是 Plugin Manager 不显示 Config。 */
 function loadSchemaLib() {
@@ -522,6 +522,19 @@ function buildCommanderPrompt({ cwd, goal, docs, config, modelLabel, commanderId
 
 /** 只读 shell 白名单：按命令首 token 判定，避免路径里出现 npm/node 就被误杀。 */
 const READ_ONLY_COMMANDS = new Set([
+  // Unix 侧的基础读取/查看命令（只有 rg 没有 grep 是漏的，指挥员真撞上过）
+  'grep',
+  'egrep',
+  'fgrep',
+  'rg',
+  'which',
+  'where',
+  'column',
+  'od',
+  'xxd',
+  'hostname',
+  'true',
+  'false',
   'get-content',
   'get-childitem',
   'get-item',
@@ -1695,6 +1708,46 @@ export function apply(ctx, rawConfig = {}) {
     }
   }
 
+  /**
+   * 本轮工具摘要：把 `tool/call` 与 `tool/result` 配成一行一条。
+   *
+   * 只给指挥员看「干了什么、成没成」，参数截断到 60 字——它要判断方向，
+   * 不需要重读全部输出。
+   */
+  function summarizeTools(session, fromSeq) {
+    let events = []
+    try {
+      events = typeof session?.snapshotEvents === 'function' ? session.snapshotEvents(fromSeq) : []
+    } catch {
+      events = []
+    }
+    const calls = new Map()
+    const rows = []
+    for (const event of events) {
+      if (event?.type === 'tool/call') {
+        const callId = event.data?.callId
+        const name = String(event.data?.name ?? 'tool')
+        const args = String(event.data?.arguments ?? '')
+        const row = { name, args, failed: undefined }
+        if (callId !== undefined) calls.set(callId, row)
+        rows.push(row)
+        continue
+      }
+      if (event?.type === 'tool/result') {
+        const row = calls.get(event.data?.callId)
+        if (row !== undefined) row.failed = Boolean(event.error) || event.data?.message?.isError === true
+      }
+    }
+    return rows
+      .filter((row) => row.failed !== undefined || row.args.length > 0)
+      .map((row) => {
+        const compact = row.args.replace(/\s+/g, ' ').trim()
+        const shown = compact.length > 60 ? `${compact.slice(0, 60)}…` : compact
+        const mark = row.failed === undefined ? '…' : row.failed ? '✗' : '✓'
+        return `${mark} ${row.name}${shown.length > 0 ? `: ${shown}` : ''}`
+      })
+  }
+
   async function driveHandoff(state) {
     const agent = state.agent
     const header = agent?.session?.header
@@ -1717,15 +1770,17 @@ export function apply(ctx, rawConfig = {}) {
     // 一次 turn/end 只交接一次。
     state.turnEnded = false
     const session = agent.session
-    const report = lastAssistantText(session, state.lastSeq, state.lastAt)
+    const fromSeq = state.lastSeq
+    const report = lastAssistantText(session, fromSeq, state.lastAt)
+    const tools = summarizeTools(session, fromSeq)
     state.lastSeq = session?.seq ?? 0
     state.lastAt = Date.now()
-    if (report.trim().length === 0) return
+    if (report.trim().length === 0 && tools.length === 0) return
     state.inFlight = true
     try {
       const cwd = await resolveCwd(ctx, agent, undefined).catch(() => process.cwd())
       const task = currentGoalObjective(agent)
-      const sent = await sendToCommander(agent, undefined, renderReport({ report, task }), undefined, cwd)
+      const sent = await sendToCommander(agent, undefined, renderReport({ report, task, tools }), undefined, cwd)
       const result = await waitCommanderGuarded(agent, sent?.requestId)
       if (state.stopping) return
       // 指挥员挂死 / 超时：停运即可，不无限挂着，也不改接管状态。

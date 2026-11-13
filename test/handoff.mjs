@@ -60,6 +60,14 @@ check('交给指挥员的汇报带任务与正文，不带轮次', () => {
   assert.equal(renderReport({ report: '' }).includes('（本轮没有可见输出）'), true)
 })
 
+check('工具摘要进汇报，最多 16 行', () => {
+  const tools = Array.from({ length: 20 }, (_, i) => `✓ tool${i}: args`)
+  const text = renderReport({ report: 'x', tools })
+  assert.match(text, /本轮工具：/)
+  assert.equal(text.split('\n').filter((line) => line.startsWith('- ✓')).length, 16)
+  assert.equal(renderReport({ report: 'x', tools: [] }).includes('本轮工具'), false, '没有工具就不写这一段')
+})
+
 check('注入回主agent 的指令带原文与「不要问用户」边界', () => {
   const text = renderInstruction('决定：继续，把剩下的测完。')
   assert.match(text, /\[指挥员指令\]/)
