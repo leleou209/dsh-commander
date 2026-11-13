@@ -36,7 +36,7 @@ import {
 import { createTranslator, localeKeyDiff } from './messages.js'
 
 /** 运行时版本标记：status 里显示，用来确认当前进程加载的是哪一版代码（HMR 是否生效）。 */
-const PLUGIN_VERSION = '2.9.13'
+const PLUGIN_VERSION = '2.9.14'
 
 /** 从 DSH 安装目录加载 schemastery；失败时插件仍可运行，只是 Plugin Manager 不显示 Config。 */
 function loadSchemaLib() {
@@ -3163,6 +3163,8 @@ export function apply(ctx, rawConfig = {}) {
       })
       res.end(payload)
     }
+    /** 状态标签随语言一起下发，客户端不用自己维护一份文案。 */
+    const stateLabels = () => Object.fromEntries(TAKEOVER_STATES.map((state) => [state, t('takeover.' + state)]))
     const readBody = (req) =>
       new Promise((resolveBody) => {
         let data = ''
@@ -3202,18 +3204,20 @@ export function apply(ctx, rawConfig = {}) {
             source: current.source,
             label: TAKEOVER_LABELS[current.state] ?? current.state,
             states: TAKEOVER_STATES,
+            labels: stateLabels(),
           })
         }
         if (req.method === 'POST') {
           const requested = payload?.state === 'next' ? nextTakeover(current.state) : payload?.state
           const normalized = normalizeTakeover(requested)
-          if (!normalized) return sendJson(res, { error: 'invalid state', states: TAKEOVER_STATES }, 400)
+          if (!normalized) return sendJson(res, { error: 'invalid state', states: TAKEOVER_STATES, labels: stateLabels() }, 400)
           await setTakeoverOverride(sessionId, normalized)
           return sendJson(res, {
             state: normalized,
             source: 'user',
             label: TAKEOVER_LABELS[normalized] ?? normalized,
             states: TAKEOVER_STATES,
+            labels: stateLabels(),
           })
         }
         return sendJson(res, { error: 'method not allowed' }, 405)

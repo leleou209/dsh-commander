@@ -2,6 +2,12 @@
 
 版本号与 `package.json` / `index.js` 里的 `PLUGIN_VERSION` 一致；`/commander status` 首行显示运行中的版本。
 
+## 2.9.14
+
+- composer 图标重做：平时只显示皇冠 logo（按状态着色；`off` 时压暗但仍可点，不再"关掉就找不回来"），鼠标停靠高亮并显示当前状态，选完短暂回显状态名。
+- 点击改为**选择菜单**：四个状态 + 「自动（跟随 goal 状态）」，当前项有标记；`Esc` 或点外面收起；菜单用 `position: fixed` 锚定按钮，绕开 composer 的裁切。
+- 状态标签由 Host 随响应下发（`labels`），客户端不再自己维护文案。
+
 ## 2.9.13
 
 - 修 `commander(action="checks")` 的输出契约：补 `exitCode`（之前真跑命令会被输出校验拒绝，报 `value.exitCode is not a declared property`）。
