@@ -67,6 +67,14 @@ const zhCN = {
   'takeover.offRefusal':
     '用户已切换至不指挥状态，指挥agent已休息，请自行思考。要恢复就先让用户把接管状态切回「不接管」以上。',
   'takeover.starting': '正在启动指挥员…',
+  'takeover.announce.off':
+    '[接管状态] 用户已把接管状态切为「不运行指挥职责（无指挥）」：指挥员休息，不要再用 commander(action=say/wait)，自己判断推进；要恢复指挥就等用户切回「不接管」以上。',
+  'takeover.announce.observe':
+    '[接管状态] 用户已把接管状态切为「不接管」：指挥员在场但只当顾问，goal 命令与问用户都不拦。',
+  'takeover.announce.partial':
+    '[接管状态] 用户已把接管状态切为「部分接管」：goal 的 complete/edit/pause/blocked 需要先取得指挥员批准；问用户不受限。',
+  'takeover.announce.full':
+    '[接管状态] 用户已把接管状态切为「全接管」：连问用户都要先 commander(action=say) 说明卡点并 wait；goal 命令同样需要批准。',
   'gate.needApproval': 'goal {action} 需要指挥员批准：先在汇报里请求，并取得「批准：goal {action}」。',
   'gate.needApprovalPhase': 'goal {action} 需要指挥员批准（当前阶段 {phase}；若批准已在 wait 里被插件执行，无需再调 update_goal）。',
   'gate.needRelease': '没有有效的「允许结束」放行，不能结束 goal：先 commander(action=wait) 取得放行。',
@@ -199,6 +207,14 @@ const en = {
   'takeover.offRefusal':
     'The user switched to no-commander mode; the commander is resting. Think it through yourself. To restore it, the user must switch takeover back to "observe" or higher.',
   'takeover.starting': 'Starting the commander…',
+  'takeover.announce.off':
+    '[Takeover] The user switched takeover to "not running commander duties": the commander is resting. Do not call commander(action=say/wait); decide and proceed yourself. To restore it, wait for the user to switch back to "observe" or higher.',
+  'takeover.announce.observe':
+    '[Takeover] The user switched takeover to "observe": the commander is present as an advisor only; goal commands and user questions are unrestricted.',
+  'takeover.announce.partial':
+    '[Takeover] The user switched takeover to "partial": goal complete/edit/pause/blocked need commander approval first; asking the user is unrestricted.',
+  'takeover.announce.full':
+    '[Takeover] The user switched takeover to "full": even asking the user must first go through commander(action=say) and wait; goal commands also need approval.',
   'gate.needApproval': 'goal {action} needs commander approval: request it in a report and obtain "批准：goal {action}".',
   'gate.needApprovalPhase': 'goal {action} needs commander approval (current phase {phase}; if the approval was already applied during wait, do not call update_goal again).',
   'gate.needRelease': 'No valid "允许结束" release; cannot end the goal. Use commander(action=wait) to obtain one.',

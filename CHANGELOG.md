@@ -2,6 +2,13 @@
 
 版本号与 `package.json` / `index.js` 里的 `PLUGIN_VERSION` 一致；`/commander status` 首行显示运行中的版本。
 
+## 2.9.20
+
+- **切换接管状态会告诉主agent**：你在图标菜单里换状态，Host 会往会话里写一条 `developer/message`，内容是「[接管状态] 用户已把接管状态切为「部分接管」：goal 的 complete/edit/pause/blocked 需要先取得指挥员批准；问用户不受限。」之前切换是纯内存写入，主agent 完全不知道，只能等撞上门禁才发现。
+- 这条消息的 `source` 是 `system-prompt` 而不是 `user`，所以不会触发「全接管自动降为部分接管」，也不会清零「已咨询指挥员」。
+- 状态没变就不写（反复点同一个选项不刷屏）；`commander(action="start")` 落定状态时也写一条。
+- 路由 POST 的返回里多了 `announced`，用来确认这条通知到底写没写进去。
+
 ## 2.9.19
 
 接管状态从"每轮推导 + 落盘覆盖"改成"启动时初始化 + 只在内存里"，并让图标菜单成为启动入口。

@@ -41,7 +41,7 @@ import {
 import { createTranslator, localeKeyDiff } from './messages.js'
 
 /** 运行时版本标记：status 里显示，用来确认当前进程加载的是哪一版代码（HMR 是否生效）。 */
-const PLUGIN_VERSION = '2.9.19'
+const PLUGIN_VERSION = '2.9.20'
 
 /** 从 DSH 安装目录加载 schemastery；失败时插件仍可运行，只是 Plugin Manager 不显示 Config。 */
 function loadSchemaLib() {
@@ -1547,6 +1547,44 @@ export function apply(ctx, rawConfig = {}) {
     return `${label}（${state}，${why}）`
   }
 
+  /**
+   * 把「接管状态已切换」写进会话，作为一条 developer 消息。
+   *
+   * 切换是用户的决定，主agent 下一轮就该知道，而不是等撞上门禁才发现。
+   * 合成的 developer/message 不是 user/message，所以不会触发 onUserReturn
+   * 的全接管降级，也不会清零「已咨询指挥员」。
+   */
+  function announceTakeover(sessionId, state) {
+    try {
+      const session = ctx.get('sessions')?.get?.(sessionId)
+      if (!session || typeof session.append !== 'function') return false
+      let turn = 0
+      let step = 0
+      for (const event of session.ownEvents?.() ?? []) {
+        if (event?.type === 'turn/start') turn = event.data?.turn ?? turn
+        if (event?.type === 'step/start') step = event.data?.step ?? step
+      }
+      session.append(
+        'developer/message',
+        {
+          turn,
+          step,
+          message: {
+            role: 'developer',
+            id: `commander-takeover-${Date.now()}`,
+            content: [{ type: 'text', text: t('takeover.announce.' + state) }],
+            source: { kind: 'system-prompt' },
+          },
+        },
+        { surfaceOp: 'append' },
+      )
+      return true
+    } catch (error) {
+      ctx.logger?.warn?.(`dsh-commander: 接管状态通知写入失败：${error && error.message ? error.message : error}`)
+      return false
+    }
+  }
+
   async function pendingUnit() {
     if (pendingUnitPromise === undefined) {
       pendingUnitPromise = (async () => {
@@ -2825,6 +2863,8 @@ export function apply(ctx, rawConfig = {}) {
         const requestedState = normalizeTakeover(args.state)
         if (requestedState) await setTakeoverOverride(leadId, requestedState)
         else if (created || stateBefore === 'off') await setTakeoverOverride(leadId, DEFAULT_TAKEOVER)
+        // 启动也是一次状态落定：告诉主agent 现在按哪个宽度接管。
+        announceTakeover(leadId, currentTakeover(agent).state)
         const modelNote = await applyAdvisorModel(member.id)
         const titleNote = await applyCommanderTitle(member.id)
         const lines = [
@@ -3254,6 +3294,9 @@ export function apply(ctx, rawConfig = {}) {
             }
           }
           await setTakeoverOverride(sessionId, normalized)
+          // 用户点了图标就是做了决定：写一条 developer 消息，主agent 下一轮就知道。
+          // 状态没变就不写，免得反复点同一个选项刷屏。
+          const announced = normalized === current.state ? false : announceTakeover(sessionId, normalized)
           return sendJson(res, {
             state: normalized,
             source: 'user',
@@ -3262,6 +3305,7 @@ export function apply(ctx, rawConfig = {}) {
             labels: stateLabels(),
             hasCommander: started ? true : hasCommander,
             started,
+            announced,
           })
         }
         return sendJson(res, { error: 'method not allowed' }, 405)
