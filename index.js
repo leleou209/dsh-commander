@@ -38,9 +38,10 @@ import {
 } from './takeover.js'
 import { createTranslator, localeKeyDiff } from './messages.js'
 import { afterWait, classifyReply, commanderDead, HANDOFF_SOURCE, renderInstruction, renderReport, shouldHandoff } from './handoff.js'
+import { COMMANDER_TOOL_DESCRIPTION, manualTopicIds, renderManualIndex, renderManualTopic } from './manual.js'
 
 /** 运行时版本标记：status 里显示，用来确认当前进程加载的是哪一版代码（HMR 是否生效）。 */
-const PLUGIN_VERSION = '2.9.35'
+const PLUGIN_VERSION = '2.9.36'
 
 /** 从 DSH 安装目录加载 schemastery；失败时插件仍可运行，只是 Plugin Manager 不显示 Config。 */
 function loadSchemaLib() {
@@ -239,7 +240,7 @@ const COMMANDER_OUTPUT_SCHEMA = {
   additionalProperties: false,
   required: ['action', 'text'],
   properties: {
-    action: { type: 'string', enum: ['start', 'list', 'say', 'wait', 'cancel', 'goal', 'status', 'doctor', 'checks', 'handoff'] },
+    action: { type: 'string', enum: ['start', 'list', 'say', 'wait', 'cancel', 'goal', 'status', 'doctor', 'checks', 'handoff', 'help'] },
     text: { type: 'string' },
     target: { type: 'string' },
     requestId: { type: 'string' },
@@ -247,6 +248,8 @@ const COMMANDER_OUTPUT_SCHEMA = {
     decision: { type: 'string' },
     goalAction: { type: 'string' },
     goal: { type: 'string' },
+    /** help 的分段 id（只有带了 topic 才有）。 */
+    topic: { type: 'string' },
     docs: { type: 'array', items: { type: 'string' } },
     /** checks 的退出码（只有真的跑了命令才有）。 */
     exitCode: { type: 'number' },
@@ -2841,6 +2844,7 @@ export function apply(ctx, rawConfig = {}) {
       out.push(...suggestions.map((item) => `- 下一步：${item}`))
     }
     if (fixes.length > 0) out.push(`- ${t('doctor.fix.applied', { items: fixes.join('，') })}`)
+    out.push('', '首次使用或不确定流程：`commander(action="help")` 取说明书。')
     return { text: out.join('\n'), fails, warns }
   }
 
@@ -3005,21 +3009,20 @@ export function apply(ctx, rawConfig = {}) {
   // ---- 主agent使用的指挥工具 ----
   const commanderTool = {
     name: config.commandToolName,
-    description:
-      '指挥员模式：一个长期在线、可续接的 Agent Teams teammate（中层设计师 + 督察指挥）。它可以读全盘文件、跑只读 shell、写文件但默认不动手、自行按用户需求决策。' +
-      'action=doctor 一条命令自检（PASS/WARN/FAIL + 下一步；fix=true 才纠正权限）；action=checks 运行配置里的受控检查命令（name 省略则列出）；action=start 创建/接管唯一指挥员（仅当没有 goal 时创建一次 goal）；action=list 列出可寻址成员；action=say 发起咨询并登记 requestId（消息里应带本轮汇报：轮次/指令、改动、验证命令与结果、问题/风险、代码版本）；action=wait 无超时等待，返回 decision（继续/需澄清/允许结束）；action=cancel 取消等待；action=status 查看状态。' +
-      '只有指挥员明确「允许结束」才允许 complete goal；goal 状态/内容变更需要「批准：goal <动作>」；缺失决定令牌或普通回复都不算放行。' +
-      '默认先咨询指挥员再问用户：新任务/阶段开始、完成可验收阶段、遇到取舍时，先 commander say + wait；只有指挥员回「需澄清」或明确要求用户拍板时才 ask_user_question。' +
-      '需要用户输入时（选方向/给时间窗/确认不可逆操作）：先 say 说明卡点并请求「暂时作结」，拿到「决定：需澄清」+「批准：goal pause」后暂停 goal、问用户、本轮结束；不要在等用户期间让 goal 继续自动空转。' +
-      '指挥员的「继续」按问题大小分流：单点疑问/小 bug 直接答、直接修；方向性/多步工作才按批次连续完成再汇报。工程组/其他多agent仍是执行主体。',
+    description: COMMANDER_TOOL_DESCRIPTION,
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
         action: {
           type: 'string',
-          enum: ['start', 'list', 'say', 'wait', 'cancel', 'goal', 'status', 'doctor', 'checks', 'handoff'],
-          description: 'start：创建/接管；list：列出成员；say：发咨询；wait：等该请求结束；cancel：取消等待；goal：管理 goal；status：只读状态。',
+          enum: ['start', 'list', 'say', 'wait', 'cancel', 'goal', 'status', 'doctor', 'checks', 'handoff', 'help'],
+          description:
+            'start：创建/接管；list：列出成员；say：发咨询；wait：等该请求结束；cancel：取消等待；goal：管理 goal；status：只读状态；doctor：自检；checks：跑受控检查；handoff：交接探针；help：取说明书。',
+        },
+        topic: {
+          type: 'string',
+          description: 'help 的说明书分段 id（overview/states/loop/tokens/goal/full/report/troubleshoot/antipatterns）；省略则返回索引。',
         },
         message: {
           type: 'string',
@@ -3077,10 +3080,10 @@ export function apply(ctx, rawConfig = {}) {
       const agent = exec.agent
       if (!agent) throw new Error('dsh-commander: 指挥工具必须由 agent 调用')
       const action = args && typeof args.action === 'string' ? args.action : 'status'
-      if (!['start', 'list', 'say', 'wait', 'cancel', 'goal', 'status', 'doctor', 'checks', 'handoff'].includes(action)) {
-        throw new Error(
-          `dsh-commander: 未知 action "${action}"，只能是 start / list / say / wait / cancel / goal / status / doctor / checks`,
-        )
+      const ACTIONS = ['start', 'list', 'say', 'wait', 'cancel', 'goal', 'status', 'doctor', 'checks', 'handoff', 'help']
+      if (!ACTIONS.includes(action)) {
+        // 从同一个数组生成提示：加 action 时不会再忘同步文案。
+        throw new Error(`dsh-commander: 未知 action "${action}"，只能是 ${ACTIONS.join(' / ')}`)
       }
       const signal = exec.signal
       const cwd = await resolveCwd(ctx, agent, signal)
@@ -3163,6 +3166,21 @@ export function apply(ctx, rawConfig = {}) {
           }
         }
         return { action: 'handoff', text: lines.join('\n') }
+      }
+      if (action === 'help') {
+        // 说明书：不带 topic 给索引（≤30 行），带 topic 给正文。纯本地文本，不碰宿主。
+        const requested = typeof args.topic === 'string' ? args.topic.trim() : ''
+        if (requested.length === 0) return { action: 'help', text: renderManualIndex() }
+        const body = renderManualTopic(requested)
+        if (body === undefined) {
+          return {
+            action: 'help',
+            text: renderManualIndex({
+              header: `## 没有名为 "${requested}" 的说明书分段（可用：${manualTopicIds().join('、')}）`,
+            }),
+          }
+        }
+        return { action: 'help', topic: String(requested).trim().toLowerCase(), text: body }
       }
       if (action === 'checks') {
         assertRootAgent(agent)
@@ -3358,6 +3376,7 @@ export function apply(ctx, rawConfig = {}) {
           `- 文档：${DOC_FILES.map((key) => `doc/${key}.md`).join('、')}`,
           '',
           `用 \`commander(action=say, message="...")\` 发起咨询，再 \`commander(action=wait)\` 无超时等待；也可直接 \`send_message({ target: "${member.name}", ... })\`（不登记 pending）。`,
+          `第一次用请先 \`commander(action="help")\` 取说明书（索引 → 按 topic 取正文）。`,
         ]
         return { action: 'start', text: lines.join('\n'), target: member.name, docs: [], goal: goalMessage }
       }

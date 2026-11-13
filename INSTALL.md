@@ -51,16 +51,19 @@ tar -xzf local-dsh-commander-2.9.34.tgz
 
 ## 安装后自检
 
-在插件目录跑四套离线测试：
+在插件目录跑七套离线测试：
 
 ```sh
 node test/offline.mjs
+node test/takeover.mjs
+node test/handoff.mjs
 node test/regressions.mjs
 node test/state-store.mjs
+node test/manual.mjs
 node test/transcript-window.mjs
 ```
 
-预期依次是 `ALL CHECKS PASSED` / `REGRESSION CHECKS PASSED` / `STATE STORE CHECKS PASSED` / `TRANSCRIPT WINDOW CHECKS PASSED`。
+预期依次是 `ALL CHECKS PASSED` / `TAKEOVER CHECKS PASSED` / `HANDOFF CHECKS PASSED` / `REGRESSION CHECKS PASSED` / `STATE STORE CHECKS PASSED` / `MANUAL CHECKS PASSED` / `TRANSCRIPT WINDOW CHECKS PASSED`。
 
 在 DSH 里：
 
@@ -69,6 +72,18 @@ node test/transcript-window.mjs
 ```
 
 一条命令给出 PASS/WARN/FAIL：安装目录与 profile 是否一致、三处版本是否一致、状态文件权限与读写、问用户门禁、历史窗口、当前 `CODE_STATE`。
+
+## 装完之后第一件事：让主agent 读说明书
+
+插件给主agent 的是一个 `commander` 工具。**先让它读说明书**，否则它只会看到一段约 380 字符的摘要：
+
+```text
+commander(action="help")                        # 索引：9 个分段 + 什么时候该看
+commander(action="help", topic="overview")      # 它是什么、不是什么
+commander(action="help", topic="loop")          # 一轮怎么走：say → wait → 分流
+```
+
+完整文本也随包提供：[AGENT-MANUAL.md](AGENT-MANUAL.md)（由 `manual.js` 生成，测试保证一致）。人读一遍这四段就够上手：`overview` / `states` / `loop` / `tokens`。
 
 ## 注意
 

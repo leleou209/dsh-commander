@@ -2,7 +2,7 @@
 
 长线工作的「指挥员模式」：把一个**长期在线、可续接的 Agent Teams teammate** 装成「指挥员」（架构设计 + 督察指挥）。它读全部项目文件、跑只读 shell、可写文件但默认不动手，并通过 `send_message` 与 Lead 多轮对话。斜杠命令 `/commander`。
 
-> 当前版本 **2.9.35**，见 [CHANGELOG.md](CHANGELOG.md)。安装见 [INSTALL.md](INSTALL.md)，最短路径：
+> 当前版本 **2.9.36**，见 [CHANGELOG.md](CHANGELOG.md)。安装见 [INSTALL.md](INSTALL.md)，最短路径：
 >
 > ```sh
 > git clone https://github.com/leleou209/dsh-commander.git
@@ -49,6 +49,8 @@
 
 ## 主agent服从规则
 
+> **新装的 agent 第一件事**：`commander(action="help")` 取说明书索引，再按 topic 取正文（`states` / `loop` / `tokens` / `goal` / `full` / `troubleshoot` / `antipatterns`）。完整文本也在 [AGENT-MANUAL.md](AGENT-MANUAL.md)。工具说明只保留「是什么 + 动作 + 硬门禁」，协议细节都在说明书里。
+
 - 新任务/阶段开始前，先 `commander say` 汇报目标与计划，再 `wait` 取得指令；不要先问用户。
 - 每完成一个可验收阶段，先向指挥员汇报并 `wait`；收到「继续」才继续，收到「允许结束」才交付。
 - **问题分级**：单点疑问/小 bug → 指挥员直接答、主agent直接修；方向性/多步工作 → 按批次（3–7 个可验收项或一个完整交付物）连续完成再汇报。不要把小问题包装成计划。
@@ -70,6 +72,8 @@
 | `status` | 只读查看文档、goal、teammate、pending 请求、**当前 CODE_STATE**、持久化健康、放行状态与问用户门禁。 |
 | `doctor` | 一条命令自检：安装/运行态/持久化/门禁/UI 窗口/环境，输出 PASS/WARN/FAIL + 下一步建议；`fix: true` 才纠正权限与修剪。 |
 | `checks` | 运行**配置里**的受控检查命令（`checkCommands`），返回退出码、耗时与输出尾部；不给 `name` 时列出可用项。 |
+| `help` | 取**主agent 说明书**：不给 `topic` 返回索引（每个分段一行 + 什么时候该看），给 `topic` 返回该段正文。纯本地文本，不碰宿主。 |
+| `handoff` | 交接探针：`probe="checks"` 报告判定条件与 `lastSkip`/`lastError`；`probe="send"` 真发一次汇报（带 `[探针]` 前缀、不留 pending、不注入）。 |
 
 ### 斜杠命令 `/commander`
 
@@ -120,6 +124,17 @@
 ### `commander_record`
 
 把主agent完成的实质行为倒序写入 `doc/history.md`，供指挥员下一轮参考。
+
+## 主agent 说明书（2.9.36）
+
+工具说明只保留「是什么 + 动作清单 + 硬门禁 + 指路」（约 380 字符），**协议细节在说明书里**：
+
+- `commander(action="help")` → 索引（9 个分段，每段一行 + 「什么时候该看」）
+- `commander(action="help", topic="loop")` → 该段正文
+
+分段：`overview`（是什么/不是什么）、`states`（接管四态各自拦什么）、`loop`（say → wait → 分流）、`tokens`（决定令牌/批准行/CODE_STATE 回显）、`goal`（goal 门禁三条硬规则）、`full`（换驾驶员：自动交接）、`report`（汇报五要素）、`troubleshoot`（doctor/checks/handoff 探针，先探针别猜）、`antipatterns`（都真踩过的坑）。
+
+单一事实源是 `manual.js`；[AGENT-MANUAL.md](AGENT-MANUAL.md) 由它生成，`test/manual.mjs` 逐字节比对防漂移。说明书是**中文单语**：契约令牌（决定/批准/允许结束）本身就是中文，翻译等于改协议。
 
 ## 四份协作文档（`doc/`）
 
@@ -316,6 +331,7 @@ node test/transcript-window.mjs
 - 外部改代码会在 `update_goal complete` 前的异步校验中被拒绝，不需要先跑 `status`。
 - `doc/plan.md` / `doc/agent.md` 指挥员有写权限但默认不动手；需要自动留痕时可让它写，或由主agent维护。
 - 交接的 `handoffStates` 只按需创建，根会话结束后不主动回收（内存里每条几百字节，长期多会话会缓慢增长）。
+- 说明书是**中文单语**：`locale: en` 的用户也会看到中文说明书（契约令牌本身是中文，翻译等于改协议）；有真实英文需求再加 en。
 - `/commander/takeover` 这条本地 HTTP 路由没有鉴权：只监听 loopback，任何本机进程都能改接管状态（默认接受，因为它等价于用户点图标）。
 - 探针 `probe="send"` 会真的把指挥员唤醒一次，它那句回复没有消费者（探针不注入回主agent）。
 

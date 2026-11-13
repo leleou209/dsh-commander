@@ -2,6 +2,19 @@
 
 版本号与 `package.json` / `index.js` 里的 `PLUGIN_VERSION` 一致；`/commander status` 首行显示运行中的版本。
 
+## 2.9.36
+
+用户反馈：「使用插件的 agent 不知道使用手册」。原来主agent 能看到的只有一段约 1.5k 字的工具说明，四态语义、交接循环、门禁细节、踩过的坑全塞不进去——新装的 agent 只能靠猜。
+
+- **新增 `manual.js`（说明书单一事实源）**：9 个分段 `overview` / `states` / `loop` / `tokens` / `goal` / `full` / `report` / `troubleshoot` / `antipatterns`。纯数据 + 纯函数，无宿主依赖、无时间戳。
+- **新增 `commander(action="help", topic?)`**：不给 topic 返回索引（每段一行 + 「什么时候该看」，13 行），给 topic 返回正文；未知 topic 返回索引并列出可用 id。
+- **工具说明瘦身**：从 ~1.5k 字压到 **382 字符**（`COMMANDER_TOOL_DESCRIPTION`），只留「是什么 + 11 个 action + 3 条硬门禁 + 指路 help」。`test/manual.mjs` 卡 800 字符上限，防止以后又长回去。
+- **`AGENT-MANUAL.md`**：由 `manual.js` 生成（9.4KB），随包分发；`test/manual.mjs` 逐字节比对，改了源不重新生成就会红。
+- **入门指路**：`start` 与 `doctor` 的输出各加一行「首次使用请 `commander(action="help")`」；INSTALL 增加「装完之后第一件事」。
+- **中文单语**：说明书只写中文——契约令牌（决定/批准/允许结束）本身就是中文，翻译等于改协议。`locale: en` 用户会看到中文说明书，作为已知限制记入 README。
+
+测试：新增 `test/manual.mjs`（8 项）并登记进 `checks`；七套全绿。
+
 ## 2.9.35
 
 把 2.9.34 那轮审计里剩下的四项收尾：
