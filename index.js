@@ -41,7 +41,7 @@ import { createTranslator, localeKeyDiff } from './messages.js'
 import { classifyReply, commanderDead, HANDOFF_SOURCE, renderInstruction, renderReport, shouldHandoff } from './handoff.js'
 
 /** 运行时版本标记：status 里显示，用来确认当前进程加载的是哪一版代码（HMR 是否生效）。 */
-const PLUGIN_VERSION = '2.9.28'
+const PLUGIN_VERSION = '2.9.29'
 
 /** 从 DSH 安装目录加载 schemastery；失败时插件仍可运行，只是 Plugin Manager 不显示 Config。 */
 function loadSchemaLib() {
@@ -1829,7 +1829,15 @@ export function apply(ctx, rawConfig = {}) {
     if (state.run !== undefined) return
     let run
     try {
-      run = ctx.agents.withoutInitiator(async () => {
+      // `withoutInitiator` 只是归因卫生：拿不到就直连，别为它把整条交接断掉。
+      // （`ctx.agents` 是必须 inject 的服务，本插件没 inject 它，所以这里只能 ctx.get。）
+      let agentsService
+      try {
+        agentsService = ctx.get('agents')
+      } catch {
+        agentsService = undefined
+      }
+      const body = async () => {
         while (state.requested && !state.stopping) {
           state.requested = false
           try {
@@ -1839,10 +1847,13 @@ export function apply(ctx, rawConfig = {}) {
             ctx.logger?.warn?.(`dsh-commander: 交接驱动异常：${state.lastError}`)
           }
         }
-      })
+      }
+      run =
+        typeof agentsService?.withoutInitiator === 'function'
+          ? agentsService.withoutInitiator(body)
+          : body()
     } catch (error) {
-      // withoutInitiator 本身抛错（服务不可用等）：记下来，别静默。
-      state.lastError = `withoutInitiator: ${error && error.message ? error.message : error}`
+      state.lastError = `drive start: ${error && error.message ? error.message : error}`
       state.requested = false
       return
     }
