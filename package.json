@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-commander",
-  "version": "2.9.38",
+  "version": "2.9.39",
   "private": true,
   "type": "module",
   "description": "指挥员模式（dsh-commander）：一个长期在线、可续接的 Agent Teams teammate「指挥员」，负责架构设计、功能铺展与督察验收；可读全部文件、跑只读 shell 与受控检查命令、可写 doc 但默认不动手。",
@@ -41,6 +41,7 @@
     "takeover.js",
     "handoff.js",
     "manual.js",
+    "actions.js",
     "prompts.js",
     "checks.js",
     "doctor.js",
@@ -61,6 +62,7 @@
     "test/transcript-window.mjs",
     "test/manual.mjs",
     "test/style.mjs",
+    "test/actions.mjs",
     "INSTALL.md"
   ],
   "dsh": {

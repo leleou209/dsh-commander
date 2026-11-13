@@ -2,6 +2,20 @@
 
 版本号与 `package.json` / `index.js` 里的 `PLUGIN_VERSION` 一致；`/commander status` 首行显示运行中的版本。
 
+## 2.9.39
+
+代码整理第二批（P2）：把「加一个 action 要改六处」收敛成「改一处」，并让斜杠命令复用工具实现。
+
+- **新增 `actions.js`（action 注册表，唯一事实源）**：每个 action 一行（id / 中文摘要 / 英文摘要 / 是否斜杠可见 / 中文别名）。从它派生：
+  - `COMMANDER_OUTPUT_SCHEMA` 的 `enum`（现在是 `enum: ACTION_IDS`，不再手写数组）；
+  - `execute()` 的白名单与「未知 action」提示（不再手写第二个数组）；
+  - 工具 description 里的 action 段（`actionSegment('en')`，中英各一份）；
+  - 斜杠 verb 与中文别名解析（`resolveSlash()`）。
+- **斜杠命令复用工具实现**：`/commander start|list|status` 改为直接调 `commanderTool.execute(...)`。**唯一的行为变化**是斜杠 `start` 补齐了工具路径的信息（模型/标题/接管状态/文档等 4 项），消除了两条路径的漂移。
+- **新增 `test/actions.mjs`（8 项）**：断言 schema enum 直接引用 `ACTION_IDS`、description 由 `actionSegment` 派生、README 工具表每个 action 都有一行、`help.usage2` 列出全部 slash action、verb/别名解析与注册表一致、委派块确实调用同一实现、`index.js` 里不再有手写 action 数组。**这个测试第一次跑就抓到一个真漏**：README 工具表缺 `goal` 那一行（一直没有），已补。
+- **`test/style.mjs`**：`index.js` 基线 3136 → **3119**；空 catch 检查扩展到**多行空体**（只注释的 catch 允许，因为那就是 best-effort 说明）；顺手把 7 处光秃秃的 `// 忽略` 换成具体原因。
+
+`index.js` 3136 → 3119（-17）。**未达标项如实记录**：计划目标 ≤2400 没做到——本轮只合并了斜杠层，`execute()` 的 if 链本身是**唯一实现**（不是重复），把它改写成表属于纯形式重构、对 `index.js` 体积影响小而对交接路径风险大；我尝试过用脚本做整体改写，因为字符串/模板里的花括号导致配对错位、生成代码语法错误，**已回退**，没有硬推。真正的体积大头是 `apply()` 组合层（2475 行），要降它得拆守卫与工具注册，那是第三批。
 ## 2.9.38
 
 代码整理第一批（P1 拆模块 + P3 卫生）。零行为变化，八个套件全绿。

@@ -42,10 +42,11 @@ import { DEFAULT_GOAL_REMINDER, DOC_FILES, DOC_HEADERS, GOAL_MARKER, buildComman
 import { createChecks } from './checks.js'
 import { createDoctor } from './doctor.js'
 import { createHandoffDriver } from './handoff-driver.js'
+import { ACTION_IDS, actionSegment } from './actions.js'
 import { COMMANDER_TOOL_DESCRIPTION, manualTopicIds, renderManualIndex, renderManualTopic } from './manual.js'
 
 /** 运行时版本标记：status 里显示，用来确认当前进程加载的是哪一版代码（HMR 是否生效）。 */
-const PLUGIN_VERSION = '2.9.38'
+const PLUGIN_VERSION = '2.9.39'
 
 /** 从 DSH 安装目录加载 schemastery；失败时插件仍可运行，只是 Plugin Manager 不显示 Config。 */
 function loadSchemaLib() {
@@ -189,7 +190,7 @@ const COMMANDER_OUTPUT_SCHEMA = {
   additionalProperties: false,
   required: ['action', 'text'],
   properties: {
-    action: { type: 'string', enum: ['start', 'list', 'say', 'wait', 'cancel', 'goal', 'status', 'doctor', 'checks', 'handoff', 'help'] },
+    action: { type: 'string', enum: ACTION_IDS },
     text: { type: 'string' },
     target: { type: 'string' },
     requestId: { type: 'string' },
@@ -969,7 +970,7 @@ export function apply(ctx, rawConfig = {}) {
       resumeAfterAbnormal(root).catch(() => {})
     }
   } catch {
-    // 忽略
+      // best-effort：agents 服务不可用时跳过归因
   }
 
   ctx.on('agent/disposed', ({ agent }) => {
@@ -1028,7 +1029,7 @@ export function apply(ctx, rawConfig = {}) {
           savePending(leadId, { ...pending, lastReply: { text, at: Date.now() } }).catch(() => {})
         }
       } catch {
-        // 忽略
+        // best-effort：作用域已销毁，释放失败无需处理
       }
     }
     if (!session?.header || session.header.parentSession) return
@@ -1722,7 +1723,7 @@ export function apply(ctx, rawConfig = {}) {
       try {
         await unit.deleteRecord('pending', leadId)
       } catch {
-        // 忽略
+      // best-effort：写盘失败时退回内存，readError 已记录
       }
     }
   }
@@ -1789,7 +1790,7 @@ export function apply(ctx, rawConfig = {}) {
       try {
         await unit.deleteRecord('approvals', leadId)
       } catch {
-        // 忽略
+        // best-effort：清理陈旧 pending 失败不影响后续流程
       }
     }
   }
@@ -2406,10 +2407,9 @@ export function apply(ctx, rawConfig = {}) {
       const agent = exec.agent
       if (!agent) throw new Error('dsh-commander: 指挥工具必须由 agent 调用')
       const action = args && typeof args.action === 'string' ? args.action : 'status'
-      const ACTIONS = ['start', 'list', 'say', 'wait', 'cancel', 'goal', 'status', 'doctor', 'checks', 'handoff', 'help']
-      if (!ACTIONS.includes(action)) {
-        // 从同一个数组生成提示：加 action 时不会再忘同步文案。
-        throw new Error(`dsh-commander: 未知 action "${action}"，只能是 ${ACTIONS.join(' / ')}`)
+      if (!ACTION_IDS.includes(action)) {
+        // 白名单与 schema enum 都来自 actions.js，加 action 不会忘同步文案。
+        throw new Error(`dsh-commander: 未知 action "${action}"，只能是 ${ACTION_IDS.join(' / ')}`)
       }
       const signal = exec.signal
       const cwd = await resolveCwd(ctx, agent, signal)
@@ -2872,28 +2872,11 @@ export function apply(ctx, rawConfig = {}) {
             `直接跟需求也可以：\`/${config.commandName} <你的问题或任务>\`\n${COMMAND_USAGE}`,
         }
       }
-      if (verb === 'start') {
-        assertRootAgent(agent)
-        const { cwd, member, created, goalMessage } = await ensureCommanderReady(agent, signal, { commandStart: true })
-        const lines = [
-          created ? '## ' + t('start.created') : '## ' + t('start.ready'),
-          '',
-          `- target：\`${member.name}\`（session=${member.id}，status=${member.status ?? 'provisioning'}）`,
-          `- goal：${goalMessage}`,
-          '- 这是一个可续接的 teammate：后续用 `send_message` 或 `commander(action=say)` 对话，不会新建卡片。',
-          '- 它可以读全部文件、跑只读 shell、直接向用户提问；写文件/编译会被拒绝。',
-          `- 直接把需求写在命令后面即可：\`/${config.commandName} <你的问题或任务>\`。`,
-        ]
-        return { kind: 'success', text: lines.join('\n') }
-      }
-      if (verb === 'list') {
-        const roster = await commanderRoster(agent, signal)
-        return { kind: 'success', text: roster.text }
-      }
-      if (verb === 'status') {
-        const cwd = await resolveCwd(ctx, agent, signal)
-        const status = await commanderStatus(agent, cwd)
-        return { kind: 'success', text: status.text }
+      // 这几个 action 与工具完全同义：直接走同一份实现（2.9.39 P2）。
+      // 以前斜杠命令各自复制一份，start 的输出已经和工具路径漂移（少 4 项）。
+      if (verb === 'start' || verb === 'list' || verb === 'status') {
+        const result = await commanderTool.execute({ action: verb }, { agent, signal })
+        return { kind: 'success', text: result.text }
       }
       if (verb === 'doctor') {
         const cwd = await resolveCwd(ctx, agent, signal)

@@ -16,7 +16,7 @@
                     └──────┬───────┘
         ┌──────────┬───────┼────────┬───────────┬──────────────┐
         ▼          ▼       ▼        ▼           ▼              ▼
-   prompts.js  checks.js doctor.js handoff-driver.js  manual.js  messages.js
+   prompts.js  checks.js doctor.js handoff-driver.js  manual.js  messages.js  actions.js
         │          │       │        │                 │          │
         └──────────┴───────┴────────┴─────────────────┘          │
                               ▼                                   │
@@ -37,7 +37,8 @@
 | `checks.js` | 183 | 受控检查：解析 `checkCommands`、跑命令、超时杀进程树、尾部截断 | node:child_process |
 | `doctor.js` | 271 | 自检：安装/版本/挂载、成员、持久化、门禁、窗口、环境 | state-store, code-state |
 | `handoff-driver.js` | 313 | 全接管交接：判定、取本轮输出与工具摘要、等回复、注入指令 | handoff |
-| `manual.js` | 245 | 主agent 说明书（9 段）+ 工具说明 | 无 |
+| `manual.js` | 245 | 主agent 说明书（9 段）+ 工具说明 | actions |
+| `actions.js` | 105 | **action 注册表**：id/双语摘要/别名/是否斜杠可见；派生 enum、description、斜杠解析 | 无 |
 | `messages.js` | 368 | 用户可见文案 zh/en 目录 + `t()` | 无 |
 | `takeover.js` | 84 | 接管四态语义、门禁判定 | 无 |
 | `handoff.js` | 120 | 交接纯逻辑：判定、分类、渲染、等回复后的决策 | messages |
@@ -66,8 +67,13 @@
 | `commanderStatus` / `commanderRoster` / `start` 渲染 | ~230 | 与工具/命令双路径一起改才划算，否则白搬一次 |
 | 守卫（`applyCommanderRestriction` / goal 门禁 / 问用户门禁） | ~150 | 依赖 `tools.restrict` 与宿主工具面，动它要单独验证 |
 
-P2 目标：把「工具路径 vs 斜杠命令路径」合并成一张 `ACTIONS` 表 + 一个 `dispatch()`，
-让加一个 action 只改 2 处（表 + schema enum），`index.js` 降到 2000 行以内。
+P2 已完成的部分（2.9.39）：斜杠 `start|list|status` 改为直接调 `commanderTool.execute`，
+action 的元数据（enum / description / usage / 别名）全部从 `actions.js` 派生，
+`test/actions.mjs` 保证加一个 action 只改 `actions.js` 一处。
+
+仍未做（第三批）：`execute()` 的 if 链本身是**唯一实现**，不是重复——把它改成表分派属于纯形式
+重构，体积收益小、对交接路径风险大（本轮脚本改写因模板字符串里的花括号配对错位而失败，已回退）。
+体积大头其实是 `apply()` 组合层（2475 行）：要显著下降得拆守卫与工具注册。
 
 ## 规范（由 `test/style.mjs` 强制）
 
@@ -87,5 +93,6 @@ P2 目标：把「工具路径 vs 斜杠命令路径」合并成一张 `ACTIONS`
 | `test/regressions.mjs` | CODE_STATE、决议行、文案目录对齐 |
 | `test/state-store.mjs` | 权限、锁、损坏隔离、迁移、修剪 |
 | `test/manual.mjs` | 说明书 topic 完整、md 与源一致、令牌保留 |
-| `test/style.mjs` | 体量、空 catch、超长行、依赖方向 |
+| `test/style.mjs` | 体量、空 catch（含多行）、超长行、依赖方向 |
+| `test/actions.mjs` | 注册表派生一致性（enum/description/README/usage/别名/委派） |
 | `test/transcript-window.mjs` | 历史窗口挂载/卸载 |

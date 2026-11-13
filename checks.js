@@ -57,7 +57,7 @@ export function createChecks({ t, config }) {
         try {
           child.kill('SIGKILL')
         } catch {
-          // 忽略
+          // best-effort：进程可能已退出，SIGKILL 失败不需要处理
         }
       }
       return
@@ -68,7 +68,7 @@ export function createChecks({ t, config }) {
       try {
         child.kill('SIGKILL')
       } catch {
-        // 忽略
+        // best-effort：进程可能已退出，SIGKILL 失败不需要处理
       }
     }
   }

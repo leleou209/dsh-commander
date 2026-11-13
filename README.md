@@ -2,7 +2,7 @@
 
 长线工作的「指挥员模式」：把一个**长期在线、可续接的 Agent Teams teammate** 装成「指挥员」（架构设计 + 督察指挥）。它读全部项目文件、跑只读 shell、可写文件但默认不动手，并通过 `send_message` 与 Lead 多轮对话。斜杠命令 `/commander`。
 
-> 当前版本 **2.9.38**，见 [CHANGELOG.md](CHANGELOG.md)。安装见 [INSTALL.md](INSTALL.md)，最短路径：
+> 当前版本 **2.9.39**，见 [CHANGELOG.md](CHANGELOG.md)。安装见 [INSTALL.md](INSTALL.md)，最短路径：
 >
 > ```sh
 > git clone https://github.com/leleou209/dsh-commander.git
@@ -16,9 +16,9 @@
 
 模块图、依赖方向、各模块职责与行数、还留在 `index.js` 里的东西 → [ARCHITECTURE.md](ARCHITECTURE.md)。
 
-规范由 `test/style.mjs` 强制（零依赖 lint）：单文件 ≤900 行、单函数 ≤120 行、禁空 `catch`、
+规范由 `test/style.mjs` 强制（零依赖 lint）：单文件 ≤900 行、单函数 ≤120 行、禁空 `catch`（只注释的允许）、
 单行 ≤140 字符、禁反向 import 与循环依赖；历史遗留进 `BASELINE`，只降不升。
-`commander(action="checks")` 现在有 8 项（offline / takeover / handoff / regressions / state / manual / style / window）。
+`commander(action="checks")` 现在有 9 项（offline / takeover / handoff / regressions / state / manual / style / actions / window）。
 ## 形态：一个 teammate，不是每轮一张新卡
 
 - 指挥员是 Agent Teams 的 teammate；内部 target 为 `commander`（Agent Teams 要求 ASCII kebab-case），界面描述统一为「指挥员」。
@@ -77,6 +77,7 @@
 | `wait` | **无超时**等待该请求结束：指挥员本轮结束即返回回复与 `decision`（继续/需澄清/允许结束）；若有工程组/子agent完成，提前返回 `interrupt`（只验收、不分发），保留 pending，处理后再 `wait`。 |
 | `cancel` | 取消 pending；指挥员继续跑也不再恢复等待。 |
 | `status` | 只读查看文档、goal、teammate、pending 请求、**当前 CODE_STATE**、持久化健康、放行状态与问用户门禁。 |
+| `goal` | 管理 goal：`goalAction` = create/edit/pause/resume/blocked/complete/clear；与 `update_goal` 走**同一套门禁**（不是后门）。 |
 | `doctor` | 一条命令自检：安装/运行态/持久化/门禁/UI 窗口/环境，输出 PASS/WARN/FAIL + 下一步建议；`fix: true` 才纠正权限与修剪。 |
 | `checks` | 运行**配置里**的受控检查命令（`checkCommands`），返回退出码、耗时与输出尾部；不给 `name` 时列出可用项。 |
 | `help` | 取**主agent 说明书**：不给 `topic` 返回索引（每个分段一行 + 什么时候该看），给 `topic` 返回该段正文。纯本地文本，不碰宿主。 |

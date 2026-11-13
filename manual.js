@@ -20,6 +20,8 @@
  *   - usage only, no implementation detail; exact errors come from the tool results.
  */
 
+import { actionSegment } from './actions.js'
+
 /**
  * Tool description seen by the main agent (resident context: keep it short).
  *
@@ -29,7 +31,8 @@
  */
 export const COMMANDER_TOOL_DESCRIPTION =
   'Commander mode: a long-lived, resumable Agent Teams teammate (designer + supervising commander). Reads the whole workspace, runs read-only shell, may write docs but does not implement. ' +
-  'action: start adopt; list members; say consult (registers a requestId); wait untimed wait; cancel; goal manage; status; doctor self-check; checks controlled checks; handoff probe; help manual (optional topic). ' +
+  actionSegment('en') +
+  ' ' +
   'Hard gates: complete a goal only after the commander explicitly says 允许结束; goal complete/edit/pause/blocked need 批准：goal <action>; under full takeover ask the user only after say + wait. ' +
   'Unsure? commander(action="help") first.'
 

@@ -32,7 +32,7 @@ const MAX_LINE_CHARS = 140
  * index.js 还有工具层/斜杠命令层没拆（P2 计划），拆完应把它删掉。
  */
 const BASELINE_FILE_LINES = {
-  'index.js': 3136,
+  'index.js': 3119,
 }
 
 /**
@@ -140,12 +140,35 @@ check('单函数行数：新函数 ≤120，历史遗留只降不升且不得新
   }
 })
 
-check('没有真正空的 catch（不允许静默吞异常）', () => {
+check('没有真正空的 catch（单行与多行都查）', () => {
   for (const file of sourceFiles()) {
     const lines = read(file).split(/\r?\n/)
     for (let i = 0; i < lines.length; i += 1) {
-      if (!/catch\s*\{\s*\}/.test(lines[i])) continue
-      assert.fail(`${file}:${i + 1} 是空 catch；要么加注释说明 best-effort，要么处理错误`)
+      // 单行 `catch {}`
+      if (/catch\s*\{\s*\}/.test(lines[i])) {
+        assert.fail(`${file}:${i + 1} 是空 catch；要么加注释说明 best-effort，要么处理错误`)
+      }
+      // 多行 `catch {` 紧跟 `}`（允许中间只有注释）
+      if (!/catch\s*\{\s*$/.test(lines[i])) continue
+      let j = i + 1
+      let onlyComment = true
+      let closed = false
+      while (j < lines.length) {
+        const text = lines[j].trim()
+        if (text.startsWith('}')) {
+          closed = true
+          break
+        }
+        if (text.length > 0 && !text.startsWith('//') && !text.startsWith('/*') && !text.startsWith('*')) {
+          onlyComment = false
+          break
+        }
+        j += 1
+      }
+      // 只注释的 catch 允许（= 已注明 best-effort）；完全没有内容才算空。
+      if (closed && onlyComment && lines.slice(i + 1, j).every((text) => text.trim().length === 0)) {
+        assert.fail(`${file}:${i + 1} 的 catch 块完全是空的；加注释说明 best-effort 或处理错误`)
+      }
     }
   }
 })
@@ -183,7 +206,7 @@ check('依赖方向：模块不得反向 import index.js，且不得有环', () 
 })
 
 check('基线本身不能变大（防止有人为了过检查去调高数字）', () => {
-  assert.ok(BASELINE_FILE_LINES['index.js'] <= 3136, 'index.js 基线不允许上调')
+  assert.ok(BASELINE_FILE_LINES['index.js'] <= 3119, 'index.js 基线不允许上调')
   const total = Object.values(BASELINE_FUNCTION_LINES).reduce((sum, n) => sum + n, 0)
   assert.ok(total <= 4219, `长函数基线总和 ${total} 超过上限；只允许下降`)
 })

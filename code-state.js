@@ -94,7 +94,7 @@ async function resolveGitHead(root) {
       if (name === ref && sha) return sha
     }
   } catch {
-    // 忽略
+    // best-effort：refs 目录不存在时由 packed-refs 继续解析
   }
   // 解析不到提交：退回 ref 名，至少切分支/改名会变化。
   return ref
