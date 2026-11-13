@@ -41,7 +41,7 @@ import { createTranslator, localeKeyDiff } from './messages.js'
 import { classifyReply, commanderDead, HANDOFF_SOURCE, renderInstruction, renderReport, shouldHandoff } from './handoff.js'
 
 /** 运行时版本标记：status 里显示，用来确认当前进程加载的是哪一版代码（HMR 是否生效）。 */
-const PLUGIN_VERSION = '2.9.29'
+const PLUGIN_VERSION = '2.9.30'
 
 /** 从 DSH 安装目录加载 schemastery；失败时插件仍可运行，只是 Plugin Manager 不显示 Config。 */
 function loadSchemaLib() {
@@ -240,7 +240,7 @@ const COMMANDER_OUTPUT_SCHEMA = {
   additionalProperties: false,
   required: ['action', 'text'],
   properties: {
-    action: { type: 'string', enum: ['start', 'list', 'say', 'wait', 'cancel', 'goal', 'status', 'doctor', 'checks'] },
+    action: { type: 'string', enum: ['start', 'list', 'say', 'wait', 'cancel', 'goal', 'status', 'doctor', 'checks', 'handoff'] },
     text: { type: 'string' },
     target: { type: 'string' },
     requestId: { type: 'string' },
@@ -1816,9 +1816,11 @@ export function apply(ctx, rawConfig = {}) {
       const pending = await loadPending(rootSessionIdOf(agent)).catch(() => undefined)
       wakeWithInstruction(agent, result.text, pending?.commanderId ?? '')
     } catch (error) {
-      ctx.logger?.warn?.(`dsh-commander: 自动交接失败：${error && error.message ? error.message : error}`)
+      state.lastError = `drive: ${error && error.message ? error.message : error}`
+      ctx.logger?.warn?.(`dsh-commander: 自动交接失败：${state.lastError}`)
     } finally {
       state.inFlight = false
+      state.lastDriveAt = Date.now()
     }
   }
 
@@ -2970,12 +2972,17 @@ export function apply(ctx, rawConfig = {}) {
       properties: {
         action: {
           type: 'string',
-          enum: ['start', 'list', 'say', 'wait', 'cancel', 'goal', 'status', 'doctor', 'checks'],
+          enum: ['start', 'list', 'say', 'wait', 'cancel', 'goal', 'status', 'doctor', 'checks', 'handoff'],
           description: 'start：创建/接管；list：列出成员；say：发咨询；wait：等该请求结束；cancel：取消等待；goal：管理 goal；status：只读状态。',
         },
         message: {
           type: 'string',
           description: 'say 要发给指挥员的完整消息（问题、上下文、需要它判断的取舍）。',
+        },
+        probe: {
+          type: 'string',
+          enum: ['checks', 'send'],
+          description: 'handoff 探针：checks 只报判定条件；send 真发一次汇报并清掉 pending（用于排查交接不通）。',
         },
         state: {
           type: 'string',
@@ -3024,7 +3031,7 @@ export function apply(ctx, rawConfig = {}) {
       const agent = exec.agent
       if (!agent) throw new Error('dsh-commander: 指挥工具必须由 agent 调用')
       const action = args && typeof args.action === 'string' ? args.action : 'status'
-      if (!['start', 'list', 'say', 'wait', 'cancel', 'goal', 'status', 'doctor', 'checks'].includes(action)) {
+      if (!['start', 'list', 'say', 'wait', 'cancel', 'goal', 'status', 'doctor', 'checks', 'handoff'].includes(action)) {
         throw new Error(
           `dsh-commander: 未知 action "${action}"，只能是 start / list / say / wait / cancel / goal / status / doctor / checks`,
         )
@@ -3040,6 +3047,64 @@ export function apply(ctx, rawConfig = {}) {
       if (action === 'doctor') {
         const report = await doctorReport(agent, cwd, { fix: args.fix === true })
         return { action: 'doctor', text: report.text }
+      }
+      if (action === 'handoff') {
+        assertRootAgent(agent)
+        const state = handoffStateFor(agent)
+        const leadId = rootSessionIdOf(agent)
+        const session = ctx.get('sessions')?.get?.(leadId)
+        let members = []
+        try {
+          members = ctx.get('agentTeams')?.listMembers?.(agent) ?? []
+        } catch {
+          members = []
+        }
+        const member = members.find((row) => row.role === 'teammate' && row.name === config.commanderName)
+        const header = agent.session?.header
+        const lines = [
+          '## 自动交接探针',
+          `- 接管状态：${currentTakeover(agent).state}`,
+          `- agent.status：${agent.status}`,
+          `- isLead：${Boolean(header) && !header.parentSession && !commanderIds.has(agent.id)}（parentSession=${header?.parentSession ?? '无'}）`,
+          `- 标志：turnEnded=${state.turnEnded} inFlight=${state.inFlight} stopped=${state.stopped} interrupted=${state.interrupted} stopping=${state.stopping}`,
+          `- 计数：idle×${state.idleSeen}，turn/end×${state.turnEndSeen}`,
+          `- 上次跳过：${state.lastSkip ?? '（无）'}`,
+          `- 上次异常：${state.lastError ?? '（无）'}`,
+          `- 上次驱动：${state.lastDriveAt ? new Date(state.lastDriveAt).toISOString() : '（没跑过）'}`,
+          `- sessions.get：${session ? '有' : '无'}`,
+          `- agent.followup：${typeof agent.followup}`,
+          `- agent.inbox：${typeof agent.inbox}`,
+          `- 指挥员成员：${member ? `${member.name} status=${member.status}` : '未找到'}`,
+        ]
+        const probe = typeof args.probe === 'string' ? args.probe : 'checks'
+        if (probe === 'send') {
+          try {
+            const cwd = await resolveCwd(ctx, agent, undefined)
+            const fromSeq = state.lastSeq
+            const report = lastAssistantText(agent.session, fromSeq, state.lastAt)
+            const tools = summarizeTools(agent.session, fromSeq)
+            const sent = await sendToCommander(
+              agent,
+              undefined,
+              renderReport({ report, task: currentGoalObjective(agent), tools }),
+              undefined,
+              cwd,
+            )
+            const pending = await loadPending(leadId).catch(() => undefined)
+            lines.push(
+              '',
+              '## 发送探针',
+              `- requestId：${sent?.requestId ?? '（无）'}`,
+              `- commanderId：${pending?.commanderId ?? '（无）'}`,
+              `- 汇报长度：${report.length} 字，工具 ${tools.length} 条`,
+            )
+            await clearPending(leadId).catch(() => {})
+            lines.push('- 已清除这次探针登记的 pending（不会留下脏记录）')
+          } catch (error) {
+            lines.push('', '## 发送探针失败', `- ${error && error.message ? error.message : error}`)
+          }
+        }
+        return { action: 'handoff', text: lines.join('\n') }
       }
       if (action === 'checks') {
         assertRootAgent(agent)
