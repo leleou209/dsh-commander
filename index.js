@@ -38,10 +38,10 @@ import {
   TAKEOVER_STATES,
 } from './takeover.js'
 import { createTranslator, localeKeyDiff } from './messages.js'
-import { classifyReply, commanderDead, HANDOFF_SOURCE, renderInstruction, renderReport, shouldHandoff } from './handoff.js'
+import { afterWait, classifyReply, commanderDead, HANDOFF_SOURCE, renderInstruction, renderReport, shouldHandoff } from './handoff.js'
 
 /** 运行时版本标记：status 里显示，用来确认当前进程加载的是哪一版代码（HMR 是否生效）。 */
-const PLUGIN_VERSION = '2.9.32'
+const PLUGIN_VERSION = '2.9.33'
 
 /** 从 DSH 安装目录加载 schemastery；失败时插件仍可运行，只是 Plugin Manager 不显示 Config。 */
 function loadSchemaLib() {
@@ -1808,21 +1808,18 @@ export function apply(ctx, rawConfig = {}) {
       const task = currentGoalObjective(agent)
       const sent = await sendToCommander(agent, undefined, renderReport({ report, task, tools }), signal, cwd)
       const result = await waitCommanderGuarded(agent, sent?.requestId)
-      if (state.stopping) return
-      // 等回复期间用户插话了：方向盘已经交还给用户，这条指令不再注入。
-      if (state.interrupted) {
+      const outcome = afterWait({ kind: result?.kind, interrupted: state.interrupted, stopping: state.stopping })
+      // 该清的 pending 一定要清：dead/timeout/让位都会留下脏记录。
+      if (outcome.clearPending) await clearPending(rootSessionIdOf(agent)).catch(() => {})
+      if (outcome.stopped) state.stopped = true
+      if (outcome.action === 'stop') {
+        state.interrupted = false
+        ctx.logger?.warn?.(`dsh-commander: 自动交接停止（${result?.kind ?? 'unknown'}）`)
+        return
+      }
+      if (outcome.action === 'let-go') {
         state.interrupted = false
         ctx.logger?.info?.('dsh-commander: 等回复期间用户插话，本次交接让位')
-        return
-      }
-      // 指挥员挂死 / 超时：停运即可，不无限挂着，也不改接管状态。
-      if (result?.kind === 'dead' || result?.kind === 'timeout') {
-        state.stopped = true
-        ctx.logger?.warn?.(`dsh-commander: 自动交接停运（${result.kind}）`)
-        return
-      }
-      if (result?.kind !== 'reply') {
-        ctx.logger?.warn?.(`dsh-commander: 自动交接没拿到回复（${result?.kind ?? 'unknown'}）`)
         return
       }
       const verdict = classifyReply(result.text)

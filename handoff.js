@@ -79,3 +79,21 @@ export function renderInstruction(reply) {
     '注意：这是全接管下的自动交接，不要停下来问用户；进度以任务为单位汇报，不要用轮次计数。',
   ].join('\n')
 }
+
+/**
+ * 等指挥员回复之后该怎么办（纯决策，便于单测）。
+ *
+ * 三条硬规则：
+ *   - `dead` / `timeout` → 停运，并且**必须清掉 pending**（否则留下脏记录）；
+ *   - 等回复期间用户插话 → 让位一次，同样清掉 pending，不再注入；
+ *   - 正常回复 → 注入指令，pending 由 waitCommander 自己清过。
+ *
+ * @returns {{action: 'wake'|'let-go'|'stop', clearPending: boolean, stopped: boolean}}
+ */
+export function afterWait(input = {}) {
+  if (input.stopping === true) return { action: 'stop', clearPending: false, stopped: false }
+  if (input.interrupted === true) return { action: 'let-go', clearPending: true, stopped: false }
+  if (input.kind === 'dead' || input.kind === 'timeout') return { action: 'stop', clearPending: true, stopped: true }
+  if (input.kind === 'reply') return { action: 'wake', clearPending: false, stopped: false }
+  return { action: 'stop', clearPending: true, stopped: false }
+}

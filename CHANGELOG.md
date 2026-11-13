@@ -2,6 +2,27 @@
 
 版本号与 `package.json` / `index.js` 里的 `PLUGIN_VERSION` 一致；`/commander status` 首行显示运行中的版本。
 
+## 2.9.33
+
+- **失败路径补齐 pending 清理**：抽出纯函数 `afterWait()`（`handoff.js`）统一决策——`dead`/`timeout` 停运、用户插话让位、`stale`/`failed` 也停，**这三种情况都会清掉 pending**，不再留脏记录；`stopping` 时不动 pending。`test/handoff.mjs` 加了 4 项断言覆盖这三条。
+
+## 2.9.32
+
+- 交接摘要限定在本轮：`lastSeq` 在插件重载后是 0，不限窗口会把整个会话的工具都扫一遍（实测扫出 2811 条）。新增 `lastTurnStartSeq()` 取最后一个 `turn/start` 作为下限。
+
+## 2.9.31
+
+- **根因二：`sendToCommander` 缺 AbortSignal**。底层 team 服务会校验 `AbortSignal`，传 `undefined` 直接抛 `signals[0] is not of type AbortSignal`。交接和探针都改成自带 `new AbortController().signal`。这个错误只在真正发送那一刻出现，前面的日志排查看不见。
+
+## 2.9.30
+
+- 新增 `commander(action="handoff")` 探针：报告判定条件、上次跳过原因、上次异常、各原语可用性，`probe="send"` 时真发一次汇报并清掉 pending。**没有这个探针，前四个根因都是靠猜的。**
+- 驱动内部的 catch 也写 `lastError`（原来只写日志，status 里看不见）。
+
+## 2.9.29
+
+- **根因一：`ctx.agents` 需要 inject**。照抄 goal-round-driver 用了 `ctx.agents.withoutInitiator(...)`，但本插件 `inject` 只有 `['tools','subagents']`，一调用就抛 `cannot get property "agents" without inject`，交接在第一步就死。改成 `ctx.get('agents')`，拿不到就直连。
+
 ## 2.9.26
 
 - **修自动交接不触发**：`agent/status=idle` 和 `turn/end` 的到达顺序不固定。原来只在 `agent/status` 里驱动，而驱动又要求 `turnEnded=true` —— 顺序反过来时这一次交接就被静默丢掉了（实跑验证：pending 里空的，指挥员根本没收到）。现在 `turn/end` 本身就是触发点，`agent/status` 只作兜底，且顺序不对时延迟 300ms 重试一次。

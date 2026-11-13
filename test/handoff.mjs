@@ -2,7 +2,7 @@
  * 自动交接（handoff）纯逻辑单测：何时交接、回复分类、两段渲染。
  */
 import assert from 'node:assert/strict'
-import { classifyReply, HANDOFF_SOURCE, renderInstruction, renderReport, shouldHandoff } from '../handoff.js'
+import { afterWait, classifyReply, HANDOFF_SOURCE, renderInstruction, renderReport, shouldHandoff } from '../handoff.js'
 
 const checks = []
 const check = (name, fn) => checks.push({ name, fn })
@@ -66,6 +66,41 @@ check('工具摘要进汇报，最多 16 行', () => {
   assert.match(text, /本轮工具：/)
   assert.equal(text.split('\n').filter((line) => line.startsWith('- ✓')).length, 16)
   assert.equal(renderReport({ report: 'x', tools: [] }).includes('本轮工具'), false, '没有工具就不写这一段')
+})
+
+check('等待结果决策：dead/timeout 停运并清 pending', () => {
+  for (const kind of ['dead', 'timeout']) {
+    const out = afterWait({ kind })
+    assert.equal(out.action, 'stop', kind)
+    assert.equal(out.clearPending, true, `${kind} 必须清 pending`)
+    assert.equal(out.stopped, true, `${kind} 应停运`)
+  }
+})
+
+check('等待结果决策：用户插话让位一次并清 pending，不注入', () => {
+  const out = afterWait({ kind: 'reply', interrupted: true })
+  assert.equal(out.action, 'let-go')
+  assert.equal(out.clearPending, true)
+  assert.equal(out.stopped, false)
+})
+
+check('等待结果决策：正常回复注入、不清 pending（waitCommander 已清）', () => {
+  const out = afterWait({ kind: 'reply' })
+  assert.equal(out.action, 'wake')
+  assert.equal(out.clearPending, false)
+  assert.equal(out.stopped, false)
+})
+
+check('等待结果决策：stale/failed 也停并清 pending；stopping 不动 pending', () => {
+  for (const kind of ['stale', 'failed', undefined]) {
+    const out = afterWait({ kind })
+    assert.equal(out.action, 'stop', String(kind))
+    assert.equal(out.clearPending, true)
+    assert.equal(out.stopped, false, '只有 dead/timeout 才停运')
+  }
+  const stopping = afterWait({ kind: 'reply', stopping: true })
+  assert.equal(stopping.action, 'stop')
+  assert.equal(stopping.clearPending, false, '卸载中不去碰 pending')
 })
 
 check('注入回主agent 的指令带原文与「不要问用户」边界', () => {
