@@ -43,10 +43,11 @@ import { createChecks } from './checks.js'
 import { createDoctor } from './doctor.js'
 import { createHandoffDriver } from './handoff-driver.js'
 import { ACTION_IDS, actionSegment } from './actions.js'
+import { askUserDenial, goalGate, invalidatesApproval, toolSurfaceDenial } from './guards.js'
 import { COMMANDER_TOOL_DESCRIPTION, manualTopicIds, renderManualIndex, renderManualTopic } from './manual.js'
 
 /** 运行时版本标记：status 里显示，用来确认当前进程加载的是哪一版代码（HMR 是否生效）。 */
-const PLUGIN_VERSION = '2.9.39'
+const PLUGIN_VERSION = '2.9.40'
 
 /** 从 DSH 安装目录加载 schemastery；失败时插件仍可运行，只是 Plugin Manager 不显示 Config。 */
 function loadSchemaLib() {
@@ -805,32 +806,24 @@ export function apply(ctx, rawConfig = {}) {
    * @returns {string|undefined} 拒绝原因；undefined 表示放行
    */
   function goalGateError(agent, action, options = {}) {
-    if (config.enforceApproval !== true) return undefined
-    const header = agent.session?.header
-    if (header?.parentSession) return undefined
-    const leadId = rootSessionIdOf(agent)
-    if (!commanderStarted.has(leadId)) return undefined
-    // partial/full 才接管 goal 命令；observe/off 下不拦。
-    if (!requiresGoalApproval(currentTakeover(agent).state)) return undefined
-    const allowed = goalApprovals.get(leadId)
-    const phase = currentGoalPhase(agent)
-    if (action === 'complete') {
-      // 已经是 complete：插件/wait 可能已替 Lead 执行，幂等放行。
-      if (approvedSessions.has(leadId) || phase === 'complete') return undefined
-      return t('gate.needRelease')
-    }
-    if (action === 'resume') return t('gate.resumeByUser')
-    if (action === 'edit' || action === 'pause' || action === 'blocked') {
-      if (allowed?.has(action)) {
-        if (options.consume !== false) allowed.delete(action)
-        return undefined
-      }
-      // goal 已经处于目标态：说明 wait 处理批准时插件已执行过，不要再报“需要批准”。
-      const targetPhase = action === 'blocked' ? 'blocked' : action === 'pause' ? 'paused' : undefined
-      if (targetPhase !== undefined && phase === targetPhase) return undefined
-      return phase ? t('gate.needApprovalPhase', { action, phase }) : t('gate.needApproval', { action })
-    }
-    return undefined
+    return goalGate({
+      enforceApproval: config.enforceApproval === true,
+      isRoot: !agent.session?.header?.parentSession,
+      commanderStarted: commanderStarted.has(rootSessionIdOf(agent)),
+      takeoverState: currentTakeover(agent).state,
+      requiresApproval: requiresGoalApproval,
+      action,
+      phase: currentGoalPhase(agent),
+      approvals: goalApprovals.get(rootSessionIdOf(agent)),
+      released: approvedSessions.has(rootSessionIdOf(agent)),
+      consume: options.consume !== false,
+      messages: {
+        needRelease: t('gate.needRelease'),
+        resumeByUser: t('gate.resumeByUser'),
+        needApproval: (act) => t('gate.needApproval', { action: act }),
+        needApprovalPhase: (act, phase) => t('gate.needApprovalPhase', { action: act, phase }),
+      },
+    })
   }
 
   // 放行门禁：写工具使当前放行失效；没有「允许结束」时不允许 complete goal。
@@ -838,24 +831,27 @@ export function apply(ctx, rawConfig = {}) {
     ctx.tools.guard((exec) => {
       const agent = exec.agent
       if (!agent) return undefined
-      const header = agent.session?.header
       const leadId = rootSessionIdOf(agent)
-      const isWriteTool = exec.name === 'write' || exec.name === 'edit' || exec.name === 'apply_patch'
-      const isShell = config.shellTools.includes(exec.name)
       const shellCommand = exec.arguments && typeof exec.arguments === 'object' ? exec.arguments.command : ''
-      const shellMutates = isShell && readOnlyShellViolation(typeof shellCommand === 'string' ? shellCommand : '') !== undefined
-      if (isWriteTool || shellMutates) {
-        approvedSessions.delete(leadId)
-      }
-      // 全接管下连 subagent 也不能直接问用户：它拿不到 commander 工具（只有根 agent 能咨询），
-      // 让它问就等于开了一个绕过指挥员的后门。
-      if (exec.name === 'ask_user_question') {
-        // 只有「全接管」才强制先咨询：partial/observe/off 下问用户不该被拦。
-        const takeover = currentTakeover(agent)
-        if (requiresConsultBeforeAsking(takeover.state) && consultedSinceUser.get(leadId) !== true) {
-          return t('gate.needCommander')
-        }
-      }
+      const shellText = typeof shellCommand === 'string' ? shellCommand : ''
+      // 判定在 guards.js（纯函数）；钩子这里只收集输入。
+      const shellViolation = config.shellTools.includes(exec.name) ? readOnlyShellViolation(shellText) : undefined
+      const mutates = invalidatesApproval({
+        toolName: exec.name,
+        shellTools: config.shellTools,
+        shellCommand: shellText,
+        shellViolation,
+      })
+      if (mutates) approvedSessions.delete(leadId)
+      // 全接管下 subagent 也不能直接问用户：它拿不到 commander 工具，问了就是绕过指挥员。
+      const askDenied = askUserDenial({
+        toolName: exec.name,
+        takeoverState: currentTakeover(agent).state,
+        consulted: consultedSinceUser.get(leadId) === true,
+        requiresConsult: requiresConsultBeforeAsking,
+        message: t('gate.needCommander'),
+      })
+      if (askDenied !== undefined) return askDenied
       if (exec.name !== 'update_goal') return undefined
       const action = exec.arguments && typeof exec.arguments === 'object' ? exec.arguments.action : undefined
       return goalGateError(agent, action)
@@ -867,21 +863,25 @@ export function apply(ctx, rawConfig = {}) {
       const agent = exec.agent
       if (!agent) return undefined
       const allowed = allowedByAgent.get(agent.id)
-      if (allowed === undefined) {
-        if (!commanderIds.has(agent.id)) return undefined
-        return denyReason(exec.name)
-      }
-      if (!allowed.has(exec.name)) return denyReason(exec.name)
-      if (exec.name === 'write' || exec.name === 'edit' || exec.name === 'apply_patch') {
-        const scopeVerdict = writeScopeViolation(agent, exec)
-        if (scopeVerdict !== undefined) return scopeVerdict
-      }
-      if (config.shellTools.includes(exec.name)) {
+      // 判定在 guards.js（纯函数）；这里只收集输入与各子判定结果。
+      const scopeVerdict =
+        exec.name === 'write' || exec.name === 'edit' || exec.name === 'apply_patch'
+          ? writeScopeViolation(agent, exec)
+          : undefined
+      const shellVerdict = (() => {
+        if (!config.shellTools.includes(exec.name)) return undefined
         const command = exec.arguments && typeof exec.arguments === 'object' ? exec.arguments.command : ''
         const verdict = readOnlyShellViolation(typeof command === 'string' ? command : '')
-        if (verdict !== undefined) return `指挥员只能执行只读命令：${verdict}`
-      }
-      return undefined
+        return verdict === undefined ? undefined : `指挥员只能执行只读命令：${verdict}`
+      })()
+      return toolSurfaceDenial({
+        toolName: exec.name,
+        isCommander: commanderIds.has(agent.id),
+        allowed,
+        writeVerdict: scopeVerdict,
+        shellVerdict,
+        denyReason: denyReason(exec.name),
+      })
     }),
   )
 

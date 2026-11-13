@@ -2,6 +2,22 @@
 
 版本号与 `package.json` / `index.js` 里的 `PLUGIN_VERSION` 一致；`/commander status` 首行显示运行中的版本。
 
+## 2.9.40
+
+守卫可测性（2.9.39 之后的一小步）。**行为零变化**，只把「该不该拦」的判定从宿主钩子里抽成纯函数。
+
+为什么只抽判定、不搬钩子：守卫挂在 `tools.guard` / `tools.restrict` 上，搬注册顺序或作用域会让门禁**静默失效**（不报错、只是不拦），比崩溃更危险。而判定依赖的只是几个显式输入（接管状态、批准集合、工具名、命令文本），抽出来就能穷举测试——这正是 `offline.mjs` 一直在替它做的事。
+
+- **新增 `guards.js`**（118 行，纯函数，无 import）：
+  - `invalidatesApproval()` —— 写类工具或会改文件的 shell 命令让放行失效；
+  - `askUserDenial()` —— 全接管下必须先咨询指挥员；
+  - `goalGate()` —— complete 要放行、resume 交用户、edit/pause/blocked 要一次性批准、已在目标态幂等放行；
+  - `toolSurfaceDenial()` —— 只读工具集 + 写作用域 + 只读 shell 的组合判决。
+- **钩子只改调用**：`ctx.tools.guard` 两处、`goalGateError` 一处，注册顺序/作用域/钩子名一行未动（`git diff` 可核）。
+- **新增 `test/guards.mjs`（15 项真值表）**：每道门禁「该拦 2 条 + 不该拦 2 条」，另加 goal 批准用一次后第二次被拒、已处于目标态放行、没有 phase 时的文案分支、写作用域/只读 shell 判决透传。
+- `index.js` **净变化 0 行**（3119 → 3119）：判定搬走后又把转发层压缩回原行数；`test/style.mjs` 基线保持 3119 不变——这批次本来就不是为行数。
+
+十套测试全绿；`commander(action="checks")` 现在有 10 项。
 ## 2.9.39
 
 代码整理第二批（P2）：把「加一个 action 要改六处」收敛成「改一处」，并让斜杠命令复用工具实现。

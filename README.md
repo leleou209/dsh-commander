@@ -2,7 +2,7 @@
 
 长线工作的「指挥员模式」：把一个**长期在线、可续接的 Agent Teams teammate** 装成「指挥员」（架构设计 + 督察指挥）。它读全部项目文件、跑只读 shell、可写文件但默认不动手，并通过 `send_message` 与 Lead 多轮对话。斜杠命令 `/commander`。
 
-> 当前版本 **2.9.39**，见 [CHANGELOG.md](CHANGELOG.md)。安装见 [INSTALL.md](INSTALL.md)，最短路径：
+> 当前版本 **2.9.40**，见 [CHANGELOG.md](CHANGELOG.md)。安装见 [INSTALL.md](INSTALL.md)，最短路径：
 >
 > ```sh
 > git clone https://github.com/leleou209/dsh-commander.git
@@ -18,7 +18,7 @@
 
 规范由 `test/style.mjs` 强制（零依赖 lint）：单文件 ≤900 行、单函数 ≤120 行、禁空 `catch`（只注释的允许）、
 单行 ≤140 字符、禁反向 import 与循环依赖；历史遗留进 `BASELINE`，只降不升。
-`commander(action="checks")` 现在有 9 项（offline / takeover / handoff / regressions / state / manual / style / actions / window）。
+`commander(action="checks")` 现在有 10 项（offline / takeover / handoff / regressions / state / manual / style / actions / guards / window）。
 ## 形态：一个 teammate，不是每轮一张新卡
 
 - 指挥员是 Agent Teams 的 teammate；内部 target 为 `commander`（Agent Teams 要求 ASCII kebab-case），界面描述统一为「指挥员」。
