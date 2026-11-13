@@ -41,7 +41,7 @@ import { createTranslator, localeKeyDiff } from './messages.js'
 import { classifyReply, commanderDead, HANDOFF_SOURCE, renderInstruction, renderReport, shouldHandoff } from './handoff.js'
 
 /** 运行时版本标记：status 里显示，用来确认当前进程加载的是哪一版代码（HMR 是否生效）。 */
-const PLUGIN_VERSION = '2.9.27'
+const PLUGIN_VERSION = '2.9.28'
 
 /** 从 DSH 安装目录加载 schemastery；失败时插件仍可运行，只是 Plugin Manager 不显示 Config。 */
 function loadSchemaLib() {
@@ -1583,11 +1583,13 @@ export function apply(ctx, rawConfig = {}) {
     if (state === undefined) return '待触发（还没见过这个会话的 idle）'
     // 括号里的计数是诊断用的：0/0 说明事件根本没到，>0 说明是门禁挡住的。
     const seen = `（idle×${state.idleSeen}，turn/end×${state.turnEndSeen}）`
-    if (state.stopping) return `正在停止${seen}`
+    const why = state.lastSkip ? `；上次跳过：${state.lastSkip}` : ''
+    const err = state.lastError ? `；上次异常：${state.lastError}` : ''
+    if (state.stopping) return `正在停止${seen}${err}`
     if (state.stopped) return `已停运（指挥员挂死或超时；重新设定接管状态即可恢复）${seen}`
     if (state.inFlight) return `等待指挥员回复${seen}`
     if (state.interrupted) return `你刚插过话，这一轮交还给你${seen}`
-    return `待触发（等这一轮结束）${seen}`
+    return `待触发（等这一轮结束）${seen}${why}${err}`
   }
 
   /**
@@ -1756,17 +1758,20 @@ export function apply(ctx, rawConfig = {}) {
     const agent = state.agent
     const header = agent?.session?.header
     const isLead = Boolean(header) && !header.parentSession && !commanderIds.has(agent.id)
+    const takeoverState = currentTakeover(agent).state
     const ready = shouldHandoff({
       stopping: state.stopping,
       inFlight: state.inFlight,
       isLead,
-      takeover: currentTakeover(agent).state,
+      takeover: takeoverState,
       status: agent.status,
       turnEnded: state.turnEnded,
       stopped: state.stopped,
       interrupted: state.interrupted,
     })
     if (!ready) {
+      // 记下到底哪一条没过——排查不靠猜。
+      state.lastSkip = `stopping=${state.stopping} inFlight=${state.inFlight} isLead=${isLead} takeover=${takeoverState} status=${agent.status} turnEnded=${state.turnEnded} stopped=${state.stopped} interrupted=${state.interrupted}`
       // 用户刚插过话：只跳过这一轮，状态不动。
       if (state.interrupted) state.interrupted = false
       return
@@ -1822,16 +1827,25 @@ export function apply(ctx, rawConfig = {}) {
     if (state.stopping) return
     state.requested = true
     if (state.run !== undefined) return
-    const run = ctx.agents.withoutInitiator(async () => {
-      while (state.requested && !state.stopping) {
-        state.requested = false
-        try {
-          await driveHandoff(state)
-        } catch (error) {
-          ctx.logger?.warn?.(`dsh-commander: 交接驱动异常：${error && error.message ? error.message : error}`)
+    let run
+    try {
+      run = ctx.agents.withoutInitiator(async () => {
+        while (state.requested && !state.stopping) {
+          state.requested = false
+          try {
+            await driveHandoff(state)
+          } catch (error) {
+            state.lastError = error && error.message ? error.message : String(error)
+            ctx.logger?.warn?.(`dsh-commander: 交接驱动异常：${state.lastError}`)
+          }
         }
-      }
-    })
+      })
+    } catch (error) {
+      // withoutInitiator 本身抛错（服务不可用等）：记下来，别静默。
+      state.lastError = `withoutInitiator: ${error && error.message ? error.message : error}`
+      state.requested = false
+      return
+    }
     state.run = run
     const retire = () => {
       state.run = undefined
