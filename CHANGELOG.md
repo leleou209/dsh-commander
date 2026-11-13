@@ -2,6 +2,10 @@
 
 版本号与 `package.json` / `index.js` 里的 `PLUGIN_VERSION` 一致；`/commander status` 首行显示运行中的版本。
 
+## 2.9.16
+
+- 菜单改用 `ReactDOM.createPortal(menu, document.body)`：composer 里有 `transform` 祖先时，`position: fixed` 会相对那个祖先定位，菜单因此固定出现在视口右下角。挂到 body 后 `fixed` 才是真正的视口坐标，也不再被 composer 裁切；保留滚动收起、视口夹取与上下翻转。
+
 ## 2.9.15
 
 - 修菜单定位：`position: fixed` 记录的是**点击那一刻**的视口坐标，页面滚动后菜单会飘到别处（截图里跑到了右下角）。现在滚动/缩放会立即收起菜单；坐标按视口夹取（不越右边界），上方放不下就朝下展开；菜单固定 208px 宽，长文案收短为「自动（跟随 goal）」。

@@ -16,6 +16,9 @@ window.__ModuleLoader__.load({
   id: '@local/dsh-commander',
   factory(require) {
     const React = require('react')
+    // 菜单必须挂到 document.body：composer 里有 transform 祖先时，fixed 会相对它定位，
+    // 之前就是因此飘到了视口右下角。
+    const ReactDOM = require('react-dom')
     const h = React.createElement
 
     const ENDPOINT = '/commander/takeover'
@@ -247,6 +250,11 @@ window.__ModuleLoader__.load({
             )
           : null
 
+      // 挂到 body：视口坐标才是真视口坐标，也不会被 composer 裁切。
+      const portalMenu = menu && typeof ReactDOM?.createPortal === 'function'
+        ? ReactDOM.createPortal(menu, document.body)
+        : menu
+
       return h(
         'span',
         { style: { display: 'inline-flex', alignItems: 'center', gap: 4 } },
@@ -302,7 +310,7 @@ window.__ModuleLoader__.load({
               flash,
             )
           : null,
-        menu,
+        portalMenu,
       )
     }
 

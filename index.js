@@ -36,7 +36,7 @@ import {
 import { createTranslator, localeKeyDiff } from './messages.js'
 
 /** 运行时版本标记：status 里显示，用来确认当前进程加载的是哪一版代码（HMR 是否生效）。 */
-const PLUGIN_VERSION = '2.9.15'
+const PLUGIN_VERSION = '2.9.16'
 
 /** 从 DSH 安装目录加载 schemastery；失败时插件仍可运行，只是 Plugin Manager 不显示 Config。 */
 function loadSchemaLib() {
