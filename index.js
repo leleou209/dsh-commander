@@ -41,7 +41,7 @@ import { createTranslator, localeKeyDiff } from './messages.js'
 import { classifyReply, commanderDead, HANDOFF_SOURCE, renderInstruction, renderReport, shouldHandoff } from './handoff.js'
 
 /** 运行时版本标记：status 里显示，用来确认当前进程加载的是哪一版代码（HMR 是否生效）。 */
-const PLUGIN_VERSION = '2.9.30'
+const PLUGIN_VERSION = '2.9.31'
 
 /** 从 DSH 安装目录加载 schemastery；失败时插件仍可运行，只是 Plugin Manager 不显示 Config。 */
 function loadSchemaLib() {
@@ -1787,9 +1787,12 @@ export function apply(ctx, rawConfig = {}) {
     if (report.trim().length === 0 && tools.length === 0) return
     state.inFlight = true
     try {
-      const cwd = await resolveCwd(ctx, agent, undefined).catch(() => process.cwd())
+      // sendToCommander 底层的 team 服务会校验 AbortSignal，传 undefined 会抛
+      // 「signals[0] is not of type AbortSignal」——这里自带一个。
+      const signal = new AbortController().signal
+      const cwd = await resolveCwd(ctx, agent, signal).catch(() => process.cwd())
       const task = currentGoalObjective(agent)
-      const sent = await sendToCommander(agent, undefined, renderReport({ report, task, tools }), undefined, cwd)
+      const sent = await sendToCommander(agent, undefined, renderReport({ report, task, tools }), signal, cwd)
       const result = await waitCommanderGuarded(agent, sent?.requestId)
       if (state.stopping) return
       // 等回复期间用户插话了：方向盘已经交还给用户，这条指令不再注入。
@@ -3079,7 +3082,8 @@ export function apply(ctx, rawConfig = {}) {
         const probe = typeof args.probe === 'string' ? args.probe : 'checks'
         if (probe === 'send') {
           try {
-            const cwd = await resolveCwd(ctx, agent, undefined)
+            const probeSignal = new AbortController().signal
+            const cwd = await resolveCwd(ctx, agent, probeSignal)
             const fromSeq = state.lastSeq
             const report = lastAssistantText(agent.session, fromSeq, state.lastAt)
             const tools = summarizeTools(agent.session, fromSeq)
@@ -3087,7 +3091,7 @@ export function apply(ctx, rawConfig = {}) {
               agent,
               undefined,
               renderReport({ report, task: currentGoalObjective(agent), tools }),
-              undefined,
+              probeSignal,
               cwd,
             )
             const pending = await loadPending(leadId).catch(() => undefined)
