@@ -21,6 +21,9 @@ window.__ModuleLoader__.load({
     const ENDPOINT = '/commander/takeover'
     const POLL_MS = 8000
     const FLASH_MS = 1600
+    /** 菜单尺寸用于视口夹取（宽度固定，高度按 5 行估算）。 */
+    const MENU_WIDTH = 208
+    const MENU_HEIGHT = 214
 
     const PALETTE = {
       off: { ring: 'rgba(127,127,127,0.45)', fill: 'rgba(127,127,127,0.25)', dim: 0.55 },
@@ -144,9 +147,29 @@ window.__ModuleLoader__.load({
           return
         }
         const rect = buttonRef.current?.getBoundingClientRect?.()
-        if (rect) setAnchor({ left: rect.left, top: rect.top })
+        if (rect) {
+          // 菜单固定宽度，位置夹在视口内；上方放不下就朝下展开。
+          const viewportWidth = window.innerWidth || 1280
+          const viewportHeight = window.innerHeight || 800
+          const left = Math.min(Math.max(8, rect.left - 8), Math.max(8, viewportWidth - MENU_WIDTH - 8))
+          const openUp = rect.top > MENU_HEIGHT + 16
+          const top = openUp ? rect.top - 8 : rect.bottom + 8
+          setAnchor({ left, top, openUp })
+        }
         setOpen(true)
       }
+
+      // 滚动/缩放会让 fixed 坐标失效：直接收起，避免菜单飘到别处。
+      React.useEffect(() => {
+        if (!open) return undefined
+        const close = () => setOpen(false)
+        window.addEventListener('scroll', close, true)
+        window.addEventListener('resize', close)
+        return () => {
+          window.removeEventListener('scroll', close, true)
+          window.removeEventListener('resize', close)
+        }
+      }, [open])
 
       const menu =
         open && anchor
@@ -156,11 +179,12 @@ window.__ModuleLoader__.load({
                 'data-commander-takeover-menu': '1',
                 style: {
                   position: 'fixed',
-                  left: Math.max(8, anchor.left - 96),
-                  top: Math.max(8, anchor.top - 8),
-                  transform: 'translateY(-100%)',
+                  left: anchor.left,
+                  top: anchor.top,
+                  transform: anchor.openUp ? 'translateY(-100%)' : 'none',
                   zIndex: 2147483000,
-                  minWidth: 196,
+                  width: MENU_WIDTH,
+                  boxSizing: 'border-box',
                   padding: 4,
                   borderRadius: 10,
                   border: '1px solid rgba(127,127,127,0.35)',
@@ -218,7 +242,7 @@ window.__ModuleLoader__.load({
                     opacity: 0.85,
                   },
                 },
-                '自动（跟随 goal 状态）',
+                '自动（跟随 goal）',
               ),
             )
           : null
