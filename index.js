@@ -41,7 +41,7 @@ import { createTranslator, localeKeyDiff } from './messages.js'
 import { classifyReply, commanderDead, HANDOFF_SOURCE, renderInstruction, renderReport, shouldHandoff } from './handoff.js'
 
 /** 运行时版本标记：status 里显示，用来确认当前进程加载的是哪一版代码（HMR 是否生效）。 */
-const PLUGIN_VERSION = '2.9.31'
+const PLUGIN_VERSION = '2.9.32'
 
 /** 从 DSH 安装目录加载 schemastery；失败时插件仍可运行，只是 Plugin Manager 不显示 Config。 */
 function loadSchemaLib() {
@@ -1754,6 +1754,19 @@ export function apply(ctx, rawConfig = {}) {
       })
   }
 
+  /** 本轮起点：最后一个 turn/start 的 seq。用来把摘要/输出限定在本轮。 */
+  function lastTurnStartSeq(session) {
+    let seq = 0
+    try {
+      for (const event of session?.ownEvents?.() ?? []) {
+        if (event?.type === 'turn/start' && typeof event.seq === 'number') seq = event.seq
+      }
+    } catch {
+      seq = 0
+    }
+    return seq
+  }
+
   async function driveHandoff(state) {
     const agent = state.agent
     const header = agent?.session?.header
@@ -1779,7 +1792,8 @@ export function apply(ctx, rawConfig = {}) {
     // 一次 turn/end 只交接一次。
     state.turnEnded = false
     const session = agent.session
-    const fromSeq = state.lastSeq
+    // 只看本轮：lastSeq 在插件重载后是 0，不限窗口会把整个会话的工具都摘要一遍。
+    const fromSeq = Math.max(state.lastSeq, lastTurnStartSeq(session))
     const report = lastAssistantText(session, fromSeq, state.lastAt)
     const tools = summarizeTools(session, fromSeq)
     state.lastSeq = session?.seq ?? 0
@@ -3084,7 +3098,7 @@ export function apply(ctx, rawConfig = {}) {
           try {
             const probeSignal = new AbortController().signal
             const cwd = await resolveCwd(ctx, agent, probeSignal)
-            const fromSeq = state.lastSeq
+            const fromSeq = Math.max(state.lastSeq, lastTurnStartSeq(agent.session))
             const report = lastAssistantText(agent.session, fromSeq, state.lastAt)
             const tools = summarizeTools(agent.session, fromSeq)
             const sent = await sendToCommander(
