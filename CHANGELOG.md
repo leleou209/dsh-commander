@@ -2,12 +2,20 @@
 
 版本号与 `package.json` / `index.js` 里的 `PLUGIN_VERSION` 一致；`/commander status` 首行显示运行中的版本。
 
+## 2.9.21
+
+- **修 2.9.20 的通知送不到模型**：2.9.20 往会话里写的是 `developer/message`，日志里查得到，但宿主的 `projectToolUpdates` 在 `toolUpdate` 未定义时会把 developer 消息整批过滤掉（`withoutDeveloperMessages`），只有 tool-addition/tool-removal 那类才留。等于写进黑洞。
+- 改用宿主自己给模型注入运行期事实的通道：`user/message` + `source.kind = 'runtime-context'`。实测模型上下文里能看到「[接管状态] 用户已把接管状态切为「部分接管」…」。
+- `source.kind` 不是 `'user'`，所以仍然不会触发「全接管自动降为部分接管」，也不会清零「已咨询指挥员」。
+- 顺带把 `announceTakeover` 里为 developer/message 推算 turn/step 的逻辑删了（user/message 不需要）。
+
 ## 2.9.20
 
-- **切换接管状态会告诉主agent**：你在图标菜单里换状态，Host 会往会话里写一条 `developer/message`，内容是「[接管状态] 用户已把接管状态切为「部分接管」：goal 的 complete/edit/pause/blocked 需要先取得指挥员批准；问用户不受限。」之前切换是纯内存写入，主agent 完全不知道，只能等撞上门禁才发现。
-- 这条消息的 `source` 是 `system-prompt` 而不是 `user`，所以不会触发「全接管自动降为部分接管」，也不会清零「已咨询指挥员」。
+- **切换接管状态会告诉主agent**：你在图标菜单里换状态，Host 会往会话里写一条通知，内容是「[接管状态] 用户已把接管状态切为「部分接管」：goal 的 complete/edit/pause/blocked 需要先取得指挥员批准；问用户不受限。」之前切换是纯内存写入，主agent 完全不知道，只能等撞上门禁才发现。
+- 这条通知的 `source` 不是 `user`，所以不会触发「全接管自动降为部分接管」，也不会清零「已咨询指挥员」。
 - 状态没变就不写（反复点同一个选项不刷屏）；`commander(action="start")` 落定状态时也写一条。
 - 路由 POST 的返回里多了 `announced`，用来确认这条通知到底写没写进去。
+- ⚠️ 这一版写的是 `developer/message`，实测模型读不到，已在 2.9.21 修正。
 
 ## 2.9.19
 

@@ -41,7 +41,7 @@ import {
 import { createTranslator, localeKeyDiff } from './messages.js'
 
 /** 运行时版本标记：status 里显示，用来确认当前进程加载的是哪一版代码（HMR 是否生效）。 */
-const PLUGIN_VERSION = '2.9.20'
+const PLUGIN_VERSION = '2.9.21'
 
 /** 从 DSH 安装目录加载 schemastery；失败时插件仍可运行，只是 Plugin Manager 不显示 Config。 */
 function loadSchemaLib() {
@@ -1548,33 +1548,26 @@ export function apply(ctx, rawConfig = {}) {
   }
 
   /**
-   * 把「接管状态已切换」写进会话，作为一条 developer 消息。
+   * 把「接管状态已切换」写进会话，作为一条 runtime-context 的 user 消息。
    *
-   * 切换是用户的决定，主agent 下一轮就该知道，而不是等撞上门禁才发现。
-   * 合成的 developer/message 不是 user/message，所以不会触发 onUserReturn
-   * 的全接管降级，也不会清零「已咨询指挥员」。
+   * 为什么不用 developer/message：宿主在 `projectToolUpdates` 里会把 developer 消息
+   * 过滤掉（toolUpdate 未定义时一律剔除），只有 tool-addition 那类才会留下——写进去
+   * 模型也读不到。runtime-context 是宿主自己给模型注入运行期事实的通道，模型一定看得到。
+   *
+   * `source.kind` 不是 'user'，所以不会触发「全接管自动降为部分接管」，
+   * 也不会清零「已咨询指挥员」。
    */
   function announceTakeover(sessionId, state) {
     try {
       const session = ctx.get('sessions')?.get?.(sessionId)
       if (!session || typeof session.append !== 'function') return false
-      let turn = 0
-      let step = 0
-      for (const event of session.ownEvents?.() ?? []) {
-        if (event?.type === 'turn/start') turn = event.data?.turn ?? turn
-        if (event?.type === 'step/start') step = event.data?.step ?? step
-      }
       session.append(
-        'developer/message',
+        'user/message',
         {
-          turn,
-          step,
-          message: {
-            role: 'developer',
-            id: `commander-takeover-${Date.now()}`,
-            content: [{ type: 'text', text: t('takeover.announce.' + state) }],
-            source: { kind: 'system-prompt' },
-          },
+          role: 'user',
+          id: `commander-takeover-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+          content: [{ type: 'text', text: t('takeover.announce.' + state) }],
+          source: { kind: 'runtime-context' },
         },
         { surfaceOp: 'append' },
       )
