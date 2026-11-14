@@ -22,32 +22,42 @@ import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
 import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { COMMANDER_CONTRACT, parseCodeState, parseDecision, parseGoalApprovals, parseRequestId } from './protocol.js'
-import { computeCodeState, describeGitHead } from './code-state.js'
-import { createStateStore, STATE_TABLES } from './state-store.js'
+import { COMMANDER_CONTRACT_BRIEF, parseCodeState, parseDecision, parseGoalApprovals, parseRequestId } from './lib/protocol.js'
+import { computeCodeState, describeGitHead } from './lib/code-state.js'
+import { createStateStore, STATE_TABLES } from './lib/state-store.js'
+import { createTakeoverStore } from './lib/takeover-store.js'
 import {
   blockedWhenOff,
+  commanderMemberOf,
   DEFAULT_TAKEOVER,
   normalizeTakeover,
   requiresConsultBeforeAsking,
   requiresGoalApproval,
   resolveTakeover,
+  startedInSession,
   TAKEOVER_LABELS,
   TAKEOVER_SOURCES,
   TAKEOVER_STATES,
-} from './takeover.js'
-import { createTranslator, localeKeyDiff } from './messages.js'
-import { afterWait, classifyReply, commanderDead, HANDOFF_SOURCE, renderInstruction, renderReport, shouldHandoff } from './handoff.js'
-import { DEFAULT_GOAL_REMINDER, DOC_FILES, DOC_HEADERS, GOAL_MARKER, buildCommanderPrompt, nowText } from './prompts.js'
-import { createChecks } from './checks.js'
-import { createDoctor } from './doctor.js'
-import { createHandoffDriver } from './handoff-driver.js'
-import { ACTION_IDS, actionSegment } from './actions.js'
-import { askUserDenial, goalGate, invalidatesApproval, toolSurfaceDenial } from './guards.js'
-import { COMMANDER_TOOL_DESCRIPTION, manualTopicIds, renderManualIndex, renderManualTopic } from './manual.js'
-
+} from './lib/takeover.js'
+import { createTranslator, localeKeyDiff, renderTeam } from './lib/messages.js'
+import { afterWait, classifyReply, commanderDead, HANDOFF_SOURCE, renderInstruction, renderReport, shouldHandoff } from './lib/handoff.js'
+import { buildCommanderPrompt, DEFAULT_GOAL_REMINDER, DOC_FILES, DOC_HEADERS, GOAL_MARKER, nowText } from './lib/prompts.js'
+import { snapshotForPrompt as snap } from './lib/prompts.js'
+import { createChecks } from './lib/checks.js'
+import { createDoctor } from './lib/doctor.js'
+import { createTeamBridge, ensureCommanderKnown } from './lib/team.js'
+import { createPreheatTracker } from './lib/preheat.js'
+import { createGoalSync, isStrongParticipation, shouldSyncGoal } from './lib/goal-link.js'
+import {
+  createPhaseTracker, planInit, runInitFlow, startWithPhase,
+} from './lib/init-flow.js'
+import { createHandoffDriver } from './lib/handoff-driver.js'
+import { ACTION_IDS, actionSegment } from './lib/actions.js'
+import { askUserDenial, ensureAbortSignal, goalGate, invalidatesApproval, toolSurfaceDenial } from './lib/guards.js'
+import { COMMANDER_TOOL_DESCRIPTION, manualTopicIds, renderManualIndex, renderManualTopic } from './lib/manual.js'
+import { clientProbe } from './lib/client-probe.js'
 /** 运行时版本标记：status 里显示，用来确认当前进程加载的是哪一版代码（HMR 是否生效）。 */
-const PLUGIN_VERSION = '2.9.40'
+const PLUGIN_VERSION = '3.0.1'
 
 /** 从 DSH 安装目录加载 schemastery；失败时插件仍可运行，只是 Plugin Manager 不显示 Config。 */
 function loadSchemaLib() {
@@ -72,7 +82,6 @@ function loadSchemaLib() {
 
 const Schema = loadSchemaLib()
 
-
 import { promises as fsp } from 'node:fs'
 import * as path from 'node:path'
 
@@ -85,8 +94,6 @@ export const inject = ['tools', 'subagents']
 const PTC_TRANSPORT = 'run_code'
 
 /** goal 协作提醒标记，用于避免重复改写同一目标。 */
-
-
 
 /** 指挥员可用的只读工具名（按项目实际挂载情况取交集）。 */
 const DEFAULT_READ_ONLY_TOOLS = [
@@ -101,11 +108,6 @@ const DEFAULT_READ_ONLY_TOOLS = [
   'edit',
   'apply_patch',
 ]
-
-
-
-
-
 
 const DEFAULT_CONFIG = {
   provider: 'spawn',
@@ -126,12 +128,13 @@ const DEFAULT_CONFIG = {
   shellTools: ['pwsh', 'bash'],
   enforceApproval: true,
   resumeOnAbnormal: true,
-  maxSuggestChars: 4000,
-  maxPlanChars: 3000,
-  maxHistoryChars: 4000,
-  maxOrientationChars: 3000,
+  // 初始化成本预算（2.9.52）：快照是首轮**未缓存输入**的大头，按字符硬卡，默认合计约 4k 字符。
+  maxSuggestChars: 700,
+  maxPlanChars: 700,
+  maxHistoryChars: 700,
+  maxOrientationChars: 500,
   planSections: 1,
-  historySections: 6,
+  historySections: 1,
   allowPtc: false,
   statePath: '',
   expectTranscriptWindow: false,
@@ -163,12 +166,12 @@ export const Config = Schema
       shellTools: Schema.array(Schema.string()).default(['pwsh', 'bash']),
       enforceApproval: Schema.boolean().default(true).description('没有「允许结束」时拒绝 complete goal'),
       resumeOnAbnormal: Schema.boolean().default(true).description('异常中断恢复会话时自动重新 arm goal'),
-      maxSuggestChars: Schema.number().default(4000),
-      maxPlanChars: Schema.number().default(3000),
-      maxHistoryChars: Schema.number().default(4000),
-      maxOrientationChars: Schema.number().default(3000),
+      maxSuggestChars: Schema.number().default(700),
+      maxPlanChars: Schema.number().default(700),
+      maxHistoryChars: Schema.number().default(700),
+      maxOrientationChars: Schema.number().default(500),
       planSections: Schema.number().default(1),
-      historySections: Schema.number().default(6),
+      historySections: Schema.number().default(1),
       allowPtc: Schema.boolean().default(false),
       statePath: Schema.string().default('').description('持久化文件路径；留空用 ~/.dsh/commander/state.json'),
       expectTranscriptWindow: Schema.boolean().default(false).description('期望 UI 历史窗口已挂载；未挂载时 status 报故障'),
@@ -315,16 +318,12 @@ function demoteHeadings(markdown) {
     .join('\n')
 }
 
-
-
 /** 历史条目格式。 */
 function formatHistoryEntry(summary, details) {
   const head = `## ${nowText()}\n\n- ${oneLine(summary)}`
   const tail = typeof details === 'string' && details.trim().length > 0 ? `\n\n${details.trim()}` : ''
   return `${head}${tail}\n\n`
 }
-
-
 
 /** 文档根目录（会话工作目录下的 docsDir），并做越界检查。 */
 function docsRoot(cwd, config) {
@@ -389,31 +388,12 @@ async function readDocsState(cwd, config) {
     history,
     plan,
     agent,
-    snapshot: {
-      // 用户建议是自由格式，整篇注入（最新在上，截断保留最上方的新内容）。
-      suggest: suggest.slice(0, config.maxSuggestChars),
-      history: newestSections(history, config.historySections, config.maxHistoryChars),
-      plan: newestSections(plan, config.planSections, config.maxPlanChars),
-      agent: newestSections(agent, config.planSections, config.maxOrientationChars),
-    },
+    snapshot: snap({ suggest, history, plan, agent, caps: config }),
+
   }
 }
 
-
-
 /** 组装指挥员 teammate 的初始提示。 */
-
-
-
-
-
-
-
-
-
-
-
-
 
 /** 只读 shell 白名单：按命令首 token 判定，避免路径里出现 npm/node 就被误杀。 */
 const READ_ONLY_COMMANDS = new Set([
@@ -668,6 +648,8 @@ export function apply(ctx, rawConfig = {}) {
     onMissing: (key) => ctx.logger?.warn?.(`dsh-commander: 缺少文案 key "${key}"`),
   })
 
+  const PLUGIN_DIR = (() => { try { return fileURLToPath(new URL('.', import.meta.url)) } catch { return undefined } })()
+
   /**
    * 进程启动时刻（不是插件加载时刻）。
    *
@@ -699,8 +681,11 @@ export function apply(ctx, rawConfig = {}) {
   const approvedSessions = new Map()
   /** 当前用户回合内是否已经咨询过指挥员。 */
   const consultedSinceUser = new Map()
-  /** 每个 Lead 会话的接管状态（只在内存里：启动时初始化，不跨进程沿用）。 */
+  /** 每个 Lead 会话的接管挡位（内存是读路径，磁盘由 takeoverStore 双写，2.9.60）。 */
   const takeoverOverrides = new Map()
+  const takeoverStore = createTakeoverStore({ map: takeoverOverrides, unit: pendingUnit, log: ctx.logger })
+  void takeoverStore.ready() // 预热：goal 门禁等同步读路径不等 await（2.9.60）
+  const preheatTracker = createPreheatTracker({ ctx, membersOf: (a) => teamService().listMembers(a), commanderName: config.commanderName })
   /** 每个 Lead 会话由指挥员批准的 goal 变更动作（一次性）。 */
   const goalApprovals = new Map()
   /** 最近一次插件执行的 goal 操作，用于判断 pause/resume 来源是 agent 还是 user。 */
@@ -769,22 +754,24 @@ export function apply(ctx, rawConfig = {}) {
     }
   }
 
-  /** 指挥员 teammate 是否已经存在（同步，供门禁使用）。 */
+  /**
+   * 指挥员 teammate 是否已经存在（同步，供门禁使用）。
+   *
+   * 兜底分支必须按**当前根会话**判断：以前返回全局 `commanderStarted.size > 0`，
+   * 只要别处起过指挥员，这里就会误判「已有指挥员」→ 跳过启动 → 用户点挡位没反应。
+   */
   function commanderExists(agent) {
     try {
-      const members = teamService().listMembers(agent)
-      return (Array.isArray(members) ? members : []).some(
-        (member) => member.role === 'teammate' && member.name === config.commanderName,
-      )
+      return commanderMemberOf(teamService().listMembers(agent), config.commanderName) !== undefined
     } catch {
-      return commanderStarted.size > 0
+      return startedInSession(commanderStarted, rootSessionIdOf(agent))
     }
   }
 
   /**
    * 当前接管状态（同步读内存缓存，门禁可以直接用）。
    *
-   * 没有指挥员=off；有指挥员=显式设定值，没设过就是启动默认值 partial。
+   * 没有指挥员=off；有指挥员=显式设定值，没设过就是启动默认值 observe（督察模式）。
    * 不再看 goal：接管宽度由你显式选择，不跟着 goal 起落。
    */
   function currentTakeover(agent) {
@@ -889,7 +876,7 @@ export function apply(ctx, rawConfig = {}) {
   function applyCommanderRestriction(agent) {
     if (!commanderIds.has(agent.id)) {
       try {
-        const membership = ctx.get('agentTeams')?.membership?.(agent)
+        const membership = teamService().membership(agent)
         if (membership?.role === 'teammate' && membership.name === config.commanderName) commanderIds.add(agent.id)
       } catch {
         // 非 Team 成员
@@ -942,7 +929,11 @@ export function apply(ctx, rawConfig = {}) {
   }
 
   // 指挥员创建时收紧它的工具面。
+  // 0.2.2 起成员身份不再由 team 提供，这里把宿主刚建出来的真实 agent 记下来，
+  // 供 ensureCommanderTeammate 在建完后按 id 找回并收紧（缓存反查会漏）。
+  const createdAgents = new Map()
   ctx.on('agent/created', ({ agent }) => {
+    if (agent?.id !== undefined) createdAgents.set(agent.id, agent)
     applyCommanderRestriction(agent)
     if (!agent?.session?.header?.parentSession) {
       hydrateApproval(agent).catch(() => {})
@@ -959,13 +950,15 @@ export function apply(ctx, rawConfig = {}) {
   // 重载后恢复“该会话已启动指挥员”的门禁作用域。
   try {
     for (const root of ctx.get('agents')?.roots?.() ?? []) {
-      let members = []
-      try {
-        members = ctx.get('agentTeams')?.listMembers?.(root) ?? []
-      } catch {
-        members = []
-      }
-      if (members.some((member) => member.name === config.commanderName)) commanderStarted.add(root.id)
+      // 成员现在来自宿主列举（异步）：后台刷新缓存，命中后补记归因；同步侧先按现有缓存判断。
+      teamService()
+        .refresh(root)
+        .then((fresh) => {
+          if (fresh.some((member) => member.name === config.commanderName)) commanderStarted.add(rootSessionIdOf(root))
+        })
+        .catch(() => {})
+      const members = teamService().listMembers(root)
+      if (members.some((member) => member.name === config.commanderName)) commanderStarted.add(rootSessionIdOf(root))
       hydrateApproval(root).catch(() => {})
       resumeAfterAbnormal(root).catch(() => {})
     }
@@ -1155,13 +1148,15 @@ export function apply(ctx, rawConfig = {}) {
 
   
 
-  /** 取 Agent Teams 服务；缺失时给出明确错误。 */
+  /**
+   * Agent Teams 桥（2.9.45）。DSH 0.2.2 起 `ctx.agentTeams` 不再提供成员创建/收发，
+   * 成员改为根会话下的可续接子agent，全部走 `ctx.subagents`；桥负责把两者缝起来，
+   * 并保证同步查询（listMembers/membership）可用。
+   */
+  let teamBridge
   function teamService() {
-    const team = ctx.get('agentTeams')
-    if (!team || typeof team.spawnTeammate !== 'function') {
-      throw new Error('dsh-commander: 当前 profile 没有 Agent Teams 服务；请启用 agent-team profile 后再用指挥员。')
-    }
-    return team
+    if (teamBridge === undefined) teamBridge = createTeamBridge({ ctx, commanderName: config.commanderName })
+    return teamBridge
   }
 
   /** 沿 parentSession 链上溯到根会话；取不到父会话时停在最后一个已知 id。 */
@@ -1210,6 +1205,7 @@ export function apply(ctx, rawConfig = {}) {
   /** 异常中断后恢复：仅对根会话、active 且被 disarmed 的 goal 重新 arm。 */
   async function resumeAfterAbnormal(agent) {
     if (!agent?.session?.header || agent.session.header.parentSession) return
+    if (!isStrongParticipation(currentTakeover(agent).state)) return // 弱参与下不自动续跑
     if (config.resumeOnAbnormal === false) return
     const record = await loadInterruption(agent.id)
     if (!record) return
@@ -1337,32 +1333,20 @@ export function apply(ctx, rawConfig = {}) {
 
   /** 确保存在唯一名为 commanderName 的 teammate；已有则直接接管。 */
   async function ensureCommanderTeammate(agent, cwd, docs, goal, signal) {
+    // team 服务要求真 AbortSignal；图标路由没有 exec signal（2.9.44 修，见 guards.js）。
+    const abortSignal = ensureAbortSignal(signal)
     const team = teamService()
-    let members = []
-    try {
-      members = team.listMembers(agent)
-    } catch {
-      members = []
-    }
+    // 缓存可能还没热（刚重启/刚载入）：先向宿主列一次，避免重复建指挥员。
+    let members = await team.refresh(agent, abortSignal).catch(() => team.listMembers(agent))
     const existing = (Array.isArray(members) ? members : []).find(
       (member) => member.role === 'teammate' && member.name === config.commanderName,
     )
     if (existing) {
-      commanderStarted.add(agent.session?.header?.id ?? agent.id)
-      if (!contractSynced.has(existing.id)) {
-        contractSynced.add(existing.id)
-        try {
-          await team.sendMessage(agent, {
-            target: existing.name,
-            content: [{ type: 'text', text: `[契约同步]\n${COMMANDER_CONTRACT}` }],
-            signal,
-          })
-        } catch {
-          contractSynced.delete(existing.id)
-        }
-      }
+      // 成员身份直接记账：不再依赖 membership 反查（0.2.2 起 team 没有 membership）。
+      commanderIds.add(existing.id)
+      commanderStarted.add(rootSessionIdOf(agent))
       try {
-        const live = ctx.get('agents')?.get?.(existing.id)
+        const live = createdAgents.get(existing.id) ?? ctx.get('agents')?.get?.(existing.id)
         if (live) applyCommanderRestriction(live)
       } catch {
         // 已存在的 teammate 由 agent/created 接管
@@ -1376,6 +1360,8 @@ export function apply(ctx, rawConfig = {}) {
       config,
       modelLabel: 'Agent Teams 路由',
       commanderId: `teammate:${config.commanderName}`,
+      // 渐进式披露：常驻 prompt 只给核心，细则让指挥员自己去读这个文件。
+      guidePath: PLUGIN_DIR ? join(PLUGIN_DIR, 'COMMANDER-GUIDE.md') : '',
     })
     const spawned = await team.spawnTeammate(agent, {
       name: config.commanderName,
@@ -1383,17 +1369,18 @@ export function apply(ctx, rawConfig = {}) {
       prompt: [{ type: 'text', text: promptText }],
       context: 'fresh',
       provider: config.provider,
-      signal,
+      signal: abortSignal,
     })
     const member = spawned?.member ?? spawned
     // agent/created 可能早于 teammate 登记完成；这里再补一次工具面收紧。
     try {
-      const live = ctx.get('agents')?.get?.(member.id)
+      const live = createdAgents.get(member.id) ?? ctx.get('agents')?.get?.(member.id)
       if (live) applyCommanderRestriction(live)
     } catch {
       // 取不到 live agent 时依赖 agent/created 的接管
     }
-    commanderStarted.add(agent.session?.header?.id ?? agent.id)
+    commanderIds.add(member.id)
+    commanderStarted.add(rootSessionIdOf(agent))
     contractSynced.add(member.id)
     return { member, created: true }
   }
@@ -1446,20 +1433,20 @@ export function apply(ctx, rawConfig = {}) {
   }
 
   /**
-   * 设置/清除某个 Lead 的接管覆盖（只在本次进程内有效）。
+   * 设置/清除某个 Lead 的接管挡位（内存 + 落盘，2.9.60）。
    *
-   * 不落盘是刻意的：接管状态属于「此刻这一轮」的选择，重启后按启动口径重新初始化，
-   * 上一次的 full 不该在新进程里复活。需要长期偏好属于另一个话题。
+   * 2.9.47 起这里是纯内存（"重启不复活 full"），2026-11-15 用户改口径：**挡位要保存**。
+   * 只存挡位，不碰 goal：恢复 full 只是把状态显示回来，不会自动开交接驱动。
    */
   async function setTakeoverOverride(leadId, state, source = 'user') {
     if (!leadId) return
     if (state === undefined || state === null) {
-      takeoverOverrides.delete(leadId)
+      takeoverStore.delete(leadId)
       return
     }
     const normalized = normalizeTakeover(state)
     if (!normalized) return
-    takeoverOverrides.set(leadId, { state: normalized, source, at: Date.now() })
+    takeoverStore.set(leadId, { state: normalized, source, at: Date.now() })
   }
 
   /** 接管状态一行（status / doctor 共用）。 */
@@ -1578,7 +1565,7 @@ export function apply(ctx, rawConfig = {}) {
   /** 指挥员成员；取不到返回 undefined。 */
   function commanderMember(agent) {
     try {
-      const members = ctx.get('agentTeams')?.listMembers?.(agent) ?? []
+      const members = teamService().listMembers(agent)
       return members.find((row) => row.role === 'teammate' && row.name === config.commanderName)
     } catch {
       return undefined
@@ -1658,9 +1645,14 @@ export function apply(ctx, rawConfig = {}) {
    * @returns {boolean} 是否真的写了通知
    */
   async function applyTakeoverChange(sessionId, state) {
-    const before = takeoverOverrides.get(sessionId)?.state
+    await takeoverStore.ready()
+    // 旧值＝「生效中的挡位」（无覆盖值＝DEFAULT_TAKEOVER）；goal 按 strong/weak 分派，weak→weak 零操作。
+    const before = takeoverOverrides.get(sessionId)?.state ?? DEFAULT_TAKEOVER
+    const levelChanged = shouldSyncGoal(before, state)
     await setTakeoverOverride(sessionId, state)
     const announced = state === before ? false : announceTakeover(sessionId, state)
+    // goal 联动（2.9.47）先写挡位再动 goal；失败只回报，不回滚挡位。初始化不走这里（2.9.58）。
+    if (levelChanged) await syncGoal(sessionId, state)
     const handoff = handoffStates.get(sessionId)
     if (handoff !== undefined) {
       handoff.stopped = false
@@ -1671,6 +1663,10 @@ export function apply(ctx, rawConfig = {}) {
     }
     return announced
   }
+
+  /** 接管状态 → goal 联动（实现在 lib/goal-link.js，可在那里单测）。 */
+  const syncGoal = createGoalSync({ ctx, rootSessionIdOf })
+  const phaseTracker = createPhaseTracker()
 
   async function pendingUnit() {
     if (pendingUnitPromise === undefined) {
@@ -1891,7 +1887,7 @@ export function apply(ctx, rawConfig = {}) {
     }
     // 指挥员已 failed：不再无限等待。
     try {
-      const members = ctx.get('agentTeams')?.listMembers?.(agent) ?? []
+      const members = teamService().listMembers(agent)
       const member = members.find((row) => row.id === pending.commanderId || row.name === pending.target)
       if (member?.status === 'failed') {
         await clearPending(leadId)
@@ -2037,6 +2033,8 @@ export function apply(ctx, rawConfig = {}) {
 
   /** 通过 Agent Teams 给指挥员发一条消息（带 requestId，登记 pending）。 */
   async function sendToCommander(agent, target, message, signal, cwd) {
+    // 同一条宿主校验：三种发送入口都要求真 AbortSignal（2.9.44 补洞）。
+    const abortSignal = ensureAbortSignal(signal)
     const leadId = agent?.session?.header?.id ?? agent?.id
     const existing = await loadPending(leadId)
     if (existing && !isStalePending(existing)) {
@@ -2048,12 +2046,8 @@ export function apply(ctx, rawConfig = {}) {
       await clearPending(leadId).catch(() => {})
     }
     const team = teamService()
-    let members = []
-    try {
-      members = team.listMembers(agent)
-    } catch {
-      members = []
-    }
+    // 缓存可能还没热（刚重启/刚载入）：先向宿主列一次，避免重复建指挥员。
+    let members = await team.refresh(agent, abortSignal).catch(() => team.listMembers(agent))
     const named = typeof target === 'string' && target.trim().length > 0 ? target.trim() : config.commanderName
     const hit = (Array.isArray(members) ? members : []).find((member) => member.name === named)
     const requestId = `req-${randomUUID()}`
@@ -2064,7 +2058,7 @@ export function apply(ctx, rawConfig = {}) {
     let targetLabel
     if (!hit) {
       // 兼容历史子agent卡片：按 session id 续接（旧 commander-<uuid> 也能被重新链接）。
-      const legacy = await listCommanderChildren(agent, signal)
+      const legacy = await listCommanderChildren(agent, abortSignal)
       const legacyHit = legacy.find((row) => row.id === named)
       if (!legacyHit) {
         const names = (Array.isArray(members) ? members : []).map((member) => member.name).join('、') || '（无）'
@@ -2073,7 +2067,9 @@ export function apply(ctx, rawConfig = {}) {
       commanderId = legacyHit.id
       targetLabel = legacyHit.id
       await applyAdvisorModel(commanderId)
-      messageId = await ctx.subagents.sendMessage(agent, commanderId, [{ type: 'text', text }], { signal })
+      messageId = await ctx.subagents.sendMessage(agent, commanderId, [{ type: 'text', text }], {
+        signal: abortSignal,
+      })
     } else {
       commanderId = hit.id
       targetLabel = hit.name
@@ -2081,7 +2077,7 @@ export function apply(ctx, rawConfig = {}) {
       messageId = await team.sendMessage(agent, {
         target: hit.name,
         content: [{ type: 'text', text }],
-        signal,
+        signal: abortSignal,
       })
     }
     const live = ctx.get('agents')?.get?.(commanderId)
@@ -2143,13 +2139,6 @@ export function apply(ctx, rawConfig = {}) {
   const runChecks = checks.runChecks
 
   // ---- doctor：实现在 doctor.js，这里只注入依赖 ----
-  const PLUGIN_DIR = (() => {
-    try {
-      return fileURLToPath(new URL(".", import.meta.url))
-    } catch {
-      return undefined
-    }
-  })()
   const doctor = createDoctor({
     t,
     config,
@@ -2255,7 +2244,7 @@ export function apply(ctx, rawConfig = {}) {
     let teammateText = t('status.notCreated')
     let teammate
     try {
-      const members = teamService().listMembers(agent)
+      const members = await teamService().refresh(agent)
       teammate = (Array.isArray(members) ? members : []).find(
         (member) => member.role === 'teammate' && member.name === config.commanderName,
       )
@@ -2343,13 +2332,13 @@ export function apply(ctx, rawConfig = {}) {
       properties: {
         action: {
           type: 'string',
-          enum: ['start', 'list', 'say', 'wait', 'cancel', 'goal', 'status', 'doctor', 'checks', 'handoff', 'help'],
+          enum: ACTION_IDS,
           description:
             'start：创建/接管；list：列出成员；say：发咨询；wait：等该请求结束；cancel：取消等待；goal：管理 goal；status：只读状态；doctor：自检；checks：跑受控检查；handoff：交接探针；help：取说明书。',
         },
         topic: {
           type: 'string',
-          description: 'help 的说明书分段 id（overview/states/loop/tokens/goal/full/report/troubleshoot/antipatterns）；省略则返回索引。',
+          description: `help 的说明书分段 id（${manualTopicIds().join('/')}）；省略则返回索引。`,
         },
         message: {
           type: 'string',
@@ -2430,7 +2419,7 @@ export function apply(ctx, rawConfig = {}) {
         const session = ctx.get('sessions')?.get?.(leadId)
         let members = []
         try {
-          members = ctx.get('agentTeams')?.listMembers?.(agent) ?? []
+          members = teamService().listMembers(agent)
         } catch {
           members = []
         }
@@ -2553,6 +2542,11 @@ export function apply(ctx, rawConfig = {}) {
         const roster = await commanderRoster(agent, signal)
         return { action: 'list', text: roster.text }
       }
+      // 并列子agent：指挥员看 Lead 的并行工作（2.9.46）。并行是效率，指挥员是决策，两者共存。
+      if (action === 'team') {
+        const rows = await teamService().liveSubagents(agent, signal)
+        return { action: 'team', text: renderTeam({ rows, t, isCommander: (id) => commanderIds.has(id) }) }
+      }
       // off（不运行指挥职责）：指挥员在后台睡觉，叫它没用——直接把话回给主agent，让它自己干。
       if (blockedWhenOff(action) && commanderExists(agent) && currentTakeover(agent).state === 'off') {
         return { action, text: t('takeover.offRefusal') }
@@ -2664,7 +2658,6 @@ export function apply(ctx, rawConfig = {}) {
       if (action === 'start') {
         const leadId = rootSessionIdOf(agent)
         const stateBefore = currentTakeover(agent).state
-        const goalMessage = await applyGoalPolicy(agent)
         const docs = await readDocsState(cwd, config)
         let goal
         try {
@@ -2697,14 +2690,14 @@ export function apply(ctx, rawConfig = {}) {
                 ? `${t('start.modelFallback')}（${modelNote.error}）`
                 : t('start.modelFallback')
           }`,
-          `- goal：${goalMessage || t('goal.kept')}`,
+          '- goal：未创建（初始化不建 goal，等用户下达任务）',
           `- ${t('label.takeover')}：${takeoverLine(agent)}`,
           `- 文档：${DOC_FILES.map((key) => `doc/${key}.md`).join('、')}`,
           '',
           `用 \`commander(action=say, message="...")\` 发起咨询，再 \`commander(action=wait)\` 无超时等待；也可直接 \`send_message({ target: "${member.name}", ... })\`（不登记 pending）。`,
           `First time? Run \`commander(action="help")\` for the manual index, then a topic.`,
         ]
-        return { action: 'start', text: lines.join('\n'), target: member.name, docs: [], goal: goalMessage }
+        return { action: 'start', text: lines.join('\n'), target: member.name, docs: [], goal: '' }
       }
 
       const message =
@@ -2859,6 +2852,7 @@ export function apply(ctx, rawConfig = {}) {
   async function handleCommanderCommand(invocation) {
     const agent = invocation.agent
     const signal = invocation.signal
+    await takeoverStore.ready()
     const raw = String(invocation.rawInput ?? '').trim()
     const resolved = resolveCommandInput(raw)
     const verb = resolved.verb
@@ -2897,7 +2891,7 @@ export function apply(ctx, rawConfig = {}) {
               `可选：${TAKEOVER_STATES.join(' / ')}；用 \`/${config.commandName} takeover <状态>\` 切换。\n` +
               `- off 不运行指挥职责：指挥员休息，commander say/wait 直接拒绝，门禁全关\n` +
               `- observe 不接管：指挥员只当顾问\n` +
-              `- partial 部分接管：goal 命令与放行归指挥员（启动默认）\n` +
+              `- observe 不接管：指挥员在场只当顾问（启动默认）\n- partial 部分接管：goal 命令与放行归指挥员\n` +
               `- full 全接管：连问用户都要先过指挥员（你不在场时用）`,
           }
         }
@@ -2990,7 +2984,6 @@ export function apply(ctx, rawConfig = {}) {
       disposeRecord()
     }
   })
-
   // 接管状态：只在内存里（启动时按口径初始化，不沿用上次进程的旧值）；再挂一个
   // 只读/可写的 HTTP 路由给客户端图标。
   //
@@ -3040,6 +3033,7 @@ export function apply(ctx, rawConfig = {}) {
       path: '/commander/takeover',
       handler: async (req, res) => {
         const url = new URL(req.url ?? '/', 'http://localhost')
+        if (url.pathname.endsWith('/client-probe')) return clientProbe.handle(req, res, url)
         let sessionId = url.searchParams.get('sessionId') ?? ''
         let payload
         if (req.method === 'POST') {
@@ -3054,61 +3048,64 @@ export function apply(ctx, rawConfig = {}) {
           }
         }
         if (!sessionId) return sendJson(res, { error: 'sessionId required' }, 400)
+        await takeoverStore.ready()
         const agent = ctx.get('agents')?.get?.(sessionId)
+        // 重启后成员缓存是空的，这里不补一次刷新的话图标会先画成问号（"不认指挥员了"，2.9.59）。
+        await ensureCommanderKnown(teamService(), agent, config.commanderName)
+        // 子会话判定不能只看 live agent：指挥员空闲时 residency 已释放，agents.get 拿不到，
+        // 旧的 fail-open 就把它当主会话 → 子会话里也长出图标（2.9.58 修）。
+        const header =
+          agent?.session?.header ?? (ctx.get('sessions')?.get?.(sessionId)?.header ?? undefined)
         const hasCommander = agent ? commanderExists(agent) : false
         const current = agent
           ? currentTakeover(agent)
           : resolveTakeover({ hasCommander: false, override: takeoverOverrides.get(sessionId)?.state })
-        if (req.method === 'GET' || req.method === 'HEAD') {
-          return sendJson(res, {
-            state: current.state,
-            source: current.source,
-            label: TAKEOVER_LABELS[current.state] ?? current.state,
-            states: TAKEOVER_STATES,
-            labels: stateLabels(),
+        const phase = phaseTracker.phaseOf({ sessionId: agent ? rootSessionIdOf(agent) : sessionId, hasCommander })
+        const stateJson = (extra = {}) => ({
+          state: current.state,
+          source: current.source,
+          label: TAKEOVER_LABELS[current.state] ?? current.state,
+          states: TAKEOVER_STATES,
+          labels: stateLabels(),
+          hasCommander,
+          phase: phaseTracker.phaseOf({ sessionId: agent ? rootSessionIdOf(agent) : sessionId, hasCommander }),
+          // 读不到会话头才 fail-open；指挥员空闲时用已知指挥员 id 兜住（2.9.58/2.9.59）。
+          canControl: header === undefined ? !commanderIds.has(sessionId) : !header.parentSession,
+          preheat: preheatTracker.read(agent),
+          ...extra,
+        })
+        if (req.method === 'GET' || req.method === 'HEAD') return sendJson(res, stateJson())
+        if (req.method === 'POST' && payload?.init === true) {
+          if (!planInit({ phase }).allowed) return sendJson(res, { error: 'init-not-allowed', phase }, 409)
+          const initRootId = agent ? rootSessionIdOf(agent) : sessionId
+          phaseTracker.markStart(initRootId)
+          const result = await runInitFlow({
+            phase,
             hasCommander,
+            start: () => startWithPhase({ start: () => startCommanderFromUi(agent), tracker: phaseTracker, id: initRootId }),
+            // 初始化只落地默认挡位（source=init），不走 applyTakeoverChange：那条路会写通知、按弱参与暂停 goal。
+            setState: (state) => setTakeoverOverride(sessionId, state, 'init'),
           })
+          if (result.reason === 'start-failed') return sendJson(res, { error: 'start-failed', message: result.message }, 500)
+          return sendJson(res, { ok: true, ...result })
         }
         if (req.method === 'POST') {
-          const requested = payload?.state
-          const normalized = normalizeTakeover(requested)
+          const normalized = normalizeTakeover(payload?.state)
           if (!normalized) return sendJson(res, { error: 'invalid state', states: TAKEOVER_STATES, labels: stateLabels() }, 400)
-          // 选了一个「运行职责」的状态、而指挥员还没起来 → 顺手把它启动起来。
-          // 这正是菜单作为入口的意义：点哪个状态，指挥员就以那个状态进场。
+          // 选了一个「运行职责」的状态、而指挥员还没起来 → 顺手启动；点哪个状态就以哪个进场。
           let started = false
           if (normalized !== 'off' && agent && !hasCommander) {
             try {
-              await startCommanderFromUi(agent)
+              await startWithPhase({ start: () => startCommanderFromUi(agent), tracker: phaseTracker, id: rootSessionIdOf(agent) })
               started = true
             } catch (error) {
-              return sendJson(
-                res,
-                {
-                  error: 'start failed',
-                  message: error && error.message ? error.message : String(error),
-                  state: current.state,
-                  source: current.source,
-                  label: TAKEOVER_LABELS[current.state] ?? current.state,
-                  states: TAKEOVER_STATES,
-                  labels: stateLabels(),
-                  hasCommander: false,
-                },
-                500,
-              )
+              const message = error && error.message ? error.message : String(error)
+              return sendJson(res, { ...stateJson({ hasCommander: false }), error: 'start failed', message }, 500)
             }
           }
-          // 用户点了图标就是做了决定：统一入口负责「写值 + 通知 + 清停运」。
           const announced = await applyTakeoverChange(sessionId, normalized)
-          return sendJson(res, {
-            state: normalized,
-            source: 'user',
-            label: TAKEOVER_LABELS[normalized] ?? normalized,
-            states: TAKEOVER_STATES,
-            labels: stateLabels(),
-            hasCommander: started ? true : hasCommander,
-            started,
-            announced,
-          })
+          const next = stateJson({ state: normalized, source: 'user', hasCommander: started ? true : hasCommander })
+          return sendJson(res, { ...next, started, announced })
         }
         return sendJson(res, { error: 'method not allowed' }, 405)
       },

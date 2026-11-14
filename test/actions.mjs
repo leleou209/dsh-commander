@@ -13,8 +13,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { ACTIONS, ACTION_IDS, actionSegment, resolveSlash } from '../actions.js'
-import { COMMANDER_TOOL_DESCRIPTION } from '../manual.js'
+import { ACTIONS, ACTION_IDS, actionSegment, resolveSlash } from '../lib/actions.js'
+import { COMMANDER_TOOL_DESCRIPTION, MANUAL_TOPICS, manualTopicIds } from '../lib/manual.js'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(here, '..')
@@ -35,11 +35,34 @@ check('注册表本身：id 唯一、kebab-case、双语摘要齐全', () => {
   assert.equal(ACTION_IDS.length, ACTIONS.length)
 })
 
-check('schema enum 与注册表一致（不是各写一份）', () => {
+check('输出 schema enum 与注册表一致（不是各写一份）', () => {
   const source = read('index.js')
   const matched = source.match(/action: \{ type: 'string', enum: ([^}]+) \}/)
   assert.ok(matched, '找不到 action enum')
   assert.equal(matched[1].trim(), 'ACTION_IDS', 'enum 必须直接引用 ACTION_IDS')
+})
+
+check('输入 schema 的 action.enum 也引用 ACTION_IDS（多行形式，2.9.44 收口）', () => {
+  const source = read('index.js')
+  // 输入 schema 是多行对象；要求 enum 独占一行且直接引 ACTION_IDS，
+  // 用 \r?\n 锚定多行，避免误匹配单行的输出 schema。
+  const matched = source.match(/action: \{\r?\n\s*type: 'string',\r?\n\s*enum: ([^\r\n,]+),/)
+  assert.ok(matched, '找不到多行输入 schema 的 action.enum')
+  assert.equal(matched[1].trim(), 'ACTION_IDS', '输入 schema enum 必须直接引用 ACTION_IDS，不能手写数组')
+})
+
+check('输入 schema 的 topic 描述由 manualTopicIds() 派生（含全部段 id）', () => {
+  const source = read('index.js')
+  assert.match(
+    source,
+    /topic: \{\r?\n\s*type: 'string',\r?\n\s*description: `help[^`]*manualTopicIds\(\)/,
+    'topic 描述必须由 manualTopicIds() 派生，不能手写分段列表',
+  )
+  // 单一事实源必须覆盖全部 MANUAL_TOPICS（含 2.9.41 新增的 models）
+  assert.deepEqual(manualTopicIds(), MANUAL_TOPICS.map((topic) => topic.id))
+  assert.ok(manualTopicIds().includes('models'), 'manualTopicIds 应含 models 段')
+  // 旧的手写 9 段列表不应再出现
+  assert.ok(!source.includes('overview/states/loop/tokens/goal/full/report/troubleshoot/antipatterns'), '仍有手写 topic 列表')
 })
 
 check('工具 description 里的 action 段由注册表派生', () => {
@@ -60,7 +83,7 @@ check('README 工具表每个 action 都有一行', () => {
 })
 
 check('斜杠用法文案列出了所有 slash action', () => {
-  const messages = read('messages.js')
+  const messages = read('lib/messages.js')
   const usage = messages.match(/'help\.usage2': '([^']+)'/g) ?? []
   assert.ok(usage.length >= 1, '找不到 help.usage2')
   const joined = usage.join(' ')

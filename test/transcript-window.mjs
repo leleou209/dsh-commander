@@ -1,6 +1,6 @@
 // transcript-window 离线验证：把历史页请求「只压不放」，不改数据、不改模型上下文。
 import assert from 'node:assert/strict'
-import { apply, clampRequest } from '../transcript-window.js'
+import { apply, clampRequest } from '../lib/transcript-window.js'
 
 // ---- 纯函数：只向下压 ----
 const CAP = 15 * 2 + 4 // 34

@@ -12,8 +12,9 @@
  */
 
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 
-import { askUserDenial, goalGate, invalidatesApproval, toolSurfaceDenial } from '../guards.js'
+import { askUserDenial, ensureAbortSignal, goalGate, invalidatesApproval, toolSurfaceDenial } from '../lib/guards.js'
 
 const checks = []
 const check = (name, fn) => checks.push({ name, fn })
@@ -148,6 +149,86 @@ check('工具面：在白名单内时，写作用域/只读 shell 的判决照�
     toolSurfaceDenial({ toolName: 'pwsh', isCommander: true, allowed, shellVerdict: 'SHELL', denyReason: 'DENY' }),
     'SHELL',
   )
+})
+
+// ---- 5) AbortSignal 兜底（2.9.44）----
+//
+// 事故形状：宿主 team 服务校验 `signals[0] instanceof AbortSignal`，图标路由启动
+// 没有 exec signal，把 undefined 透传下去 → HTTP 500 `signals[0] is not of type
+// AbortSignal.`，且 500 发生在写挡位之前，用户看到的是「点挡位完全没反应」。
+
+check('AbortSignal 兜底：undefined/null 都要变成真正的 AbortSignal', () => {
+  for (const input of [undefined, null]) {
+    const signal = ensureAbortSignal(input)
+    assert.ok(signal instanceof AbortSignal, `${String(input)} 必须变成 AbortSignal 实例`)
+    assert.equal(signal.aborted, false, '兜底 signal 不能一开始就是 aborted')
+  }
+})
+
+check('AbortSignal 兜底：传入值原样返回（同一对象，调用方 abort 才有效）', () => {
+  const controller = new AbortController()
+  assert.equal(ensureAbortSignal(controller.signal), controller.signal)
+  controller.abort()
+  assert.equal(ensureAbortSignal(controller.signal).aborted, true, 'abort 后仍应是同一个已 abort 的 signal')
+})
+
+check('AbortSignal 兜底：两次调用不共享（一处 abort 不波及别处）', () => {
+  const a = ensureAbortSignal(undefined)
+  const b = ensureAbortSignal(undefined)
+  assert.notEqual(a, b)
+  const controller = new AbortController()
+  controller.abort()
+  assert.equal(a.aborted, false, '别人的 abort 不该影响这个 signal')
+})
+
+/**
+ * 全文件审「发给宿主的 signal 实参」（2.9.44 补洞）。
+ *
+ * 宿主对 `team.sendMessage` / `team.spawnTeammate` / `ctx.subagents.sendMessage`
+ * 都校验 `signals[0] instanceof AbortSignal`，传 undefined 就是那条
+ * `signals[0] is not of type AbortSignal.` → HTTP 500。所以规则是：
+ *   - 块内不得出现裸 `signal`（作为简写属性 `signal,` / `signal }` / 位置参数 `, signal)`）；
+ *   - 必须显式写成 `signal: abortSignal`。
+ * 之前只切 `ensureCommanderTeammate` 一块，`sendToCommander` 的同类漏网就永远测不到。
+ */
+function auditHostSignalArgs(source) {
+  const patterns = ['team.sendMessage(', 'team.spawnTeammate(', 'ctx.subagents.sendMessage(']
+  const problems = []
+  for (const pattern of patterns) {
+    let from = 0
+    for (;;) {
+      const at = source.indexOf(pattern, from)
+      if (at < 0) break
+      const window = source.slice(at, at + 900)
+      const cut = window.search(/\n {2}\}/)
+      const block = cut > 0 ? window.slice(0, cut) : window
+      if (/(^|[\s{,(])signal\s*[,})]/m.test(block)) {
+        problems.push(`${pattern} 把裸 signal 传给宿主（会 500）`)
+      } else if (!/\bsignal:\s*abortSignal\b/.test(block)) {
+        problems.push(`${pattern} 没有显式 signal: abortSignal`)
+      }
+      from = at + pattern.length
+    }
+  }
+  return problems
+}
+
+check('静态门禁（全文件）：所有发给宿主的 signal 都必须是 abortSignal', () => {
+  const source = readFileSync(new URL('../index.js', import.meta.url), 'utf8')
+  const problems = auditHostSignalArgs(source)
+  assert.deepEqual(problems, [], `发现 ${problems.length} 处：${problems.join(' / ')}`)
+  // 至少要真的扫到那几个调用点，否则「零问题」是因为根本没扫到
+  assert.ok(source.includes('team.spawnTeammate('), '源码里应存在 spawnTeammate 调用')
+  assert.ok((source.match(/signal:\s*abortSignal/g) ?? []).length >= 3, '三个宿主调用点都应显式传 abortSignal')
+})
+
+check('静态门禁反例：把任一处改回裸 signal，检查器必须报错（防门禁本身失效）', () => {
+  const source = readFileSync(new URL('../index.js', import.meta.url), 'utf8')
+  const broken = source.replace('signal: abortSignal,', 'signal,')
+  assert.notEqual(broken, source, '反例夹具没生效（找不到可替换点）')
+  const problems = auditHostSignalArgs(broken)
+  assert.ok(problems.length > 0, '门禁对反例必须 FAIL —— 否则它是假绿')
+  assert.match(problems.join(' '), /裸 signal/)
 })
 
 let failed = 0

@@ -1,7 +1,10 @@
 // 一次性：算出当前各文件的函数长度，用于生成 BASELINE
 import fs from 'node:fs'
 
-const files = fs.readdirSync('.').filter((f) => f.endsWith('.js'))
+const files = [
+  ...fs.readdirSync('.').filter((f) => f.endsWith('.js')),
+  ...fs.readdirSync('lib').filter((f) => f.endsWith('.js')).map((f) => `lib/${f}`),
+]
 const rows = []
 for (const file of files) {
   const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/)

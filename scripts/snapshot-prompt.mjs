@@ -6,7 +6,7 @@ const out = process.argv[2]
 if (!out) throw new Error('usage: node snapshot-prompt.mjs <out-file>')
 
 async function load() {
-  for (const mod of ['../prompts.js', '../index.js']) {
+  for (const mod of ['../lib/prompts.js', '../index.js']) {
     try {
       const m = await import(mod)
       if (typeof m.buildCommanderPrompt === 'function') return m.buildCommanderPrompt

@@ -32,7 +32,7 @@ const MAX_LINE_CHARS = 140
  * index.js 还有工具层/斜杠命令层没拆（P2 计划），拆完应把它删掉。
  */
 const BASELINE_FILE_LINES = {
-  'index.js': 3119,
+  'index.js': 3116,
 }
 
 /**
@@ -59,9 +59,9 @@ const BASELINE_FUNCTION_LINES = {
 const BASELINE_LONG_LINES = {
   'index.js': 10,
   'handoff-driver.js': 1,
-  'manual.js': 21,
+  'manual.js': 20,
   'messages.js': 18,
-  'prompts.js': 3,
+  'prompts.js': 1,
   'protocol.js': 1,
   'state-store.js': 1,
 }
@@ -69,15 +69,19 @@ const BASELINE_LONG_LINES = {
 const checks = []
 const check = (name, fn) => checks.push({ name, fn })
 
-/** 源码文件（不含测试与脚本）。 */
+/** 源码文件（不含测试与脚本）：入口在根，其余模块在 lib/。 */
 function sourceFiles() {
-  return fs
-    .readdirSync(root)
-    .filter((file) => file.endsWith('.js'))
-    .sort()
+  const lib = path.join(root, 'lib')
+  const inner = fs.existsSync(lib)
+    ? fs.readdirSync(lib).filter((file) => file.endsWith('.js')).sort().map((file) => `lib/${file}`)
+    : []
+  return ['index.js', ...inner]
 }
 
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8')
+
+/** 基线一律按文件名登记，不随目录变化。 */
+const base = (file) => path.basename(file)
 
 /** 抓所有具名函数（含嵌套），按花括号平衡算长度。 */
 function functionLengths(file, lines) {
@@ -110,7 +114,7 @@ function functionLengths(file, lines) {
 check('单文件行数：新文件 ≤900，历史遗留只降不升', () => {
   for (const file of sourceFiles()) {
     const count = read(file).split(/\r?\n/).length
-    const baseline = BASELINE_FILE_LINES[file]
+    const baseline = BASELINE_FILE_LINES[base(file)]
     if (baseline === undefined) {
       assert.ok(count <= MAX_FILE_LINES, `${file} 有 ${count} 行，超过 ${MAX_FILE_LINES}`)
     } else {
@@ -123,7 +127,7 @@ check('单函数行数：新函数 ≤120，历史遗留只降不升且不得新
   const seen = new Set()
   for (const file of sourceFiles()) {
     const lines = read(file).split(/\r?\n/)
-    for (const row of functionLengths(file, lines)) {
+    for (const row of functionLengths(base(file), lines)) {
       const key = `${row.file}:${row.name}`
       const baseline = BASELINE_FUNCTION_LINES[key]
       if (baseline === undefined) {
@@ -178,7 +182,7 @@ check('超长行：新文件零容忍，历史遗留只降不升', () => {
     const long = read(file)
       .split(/\r?\n/)
       .filter((line) => line.length > MAX_LINE_CHARS).length
-    const baseline = BASELINE_LONG_LINES[file] ?? 0
+    const baseline = BASELINE_LONG_LINES[base(file)] ?? 0
     assert.ok(long <= baseline, `${file} 有 ${long} 行超过 ${MAX_LINE_CHARS} 字符（基线 ${baseline}）`)
   }
 })
@@ -187,9 +191,10 @@ check('依赖方向：模块不得反向 import index.js，且不得有环', () 
   const graph = {}
   for (const file of sourceFiles()) {
     const source = read(file)
-    graph[file] = [...source.matchAll(/from '\.\/([a-z-]+)\.js'/g)].map((m) => `${m[1]}.js`)
+    const node = base(file)
+    graph[node] = [...source.matchAll(/from '\.\/(?:lib\/)?([a-z-]+)\.js'/g)].map((m) => `${m[1]}.js`)
     assert.ok(
-      !graph[file].includes('index.js') || file === 'index.js',
+      !graph[node].includes('index.js') || node === 'index.js',
       `${file} 反向 import 了 index.js（会形成环）`,
     )
   }
@@ -206,7 +211,7 @@ check('依赖方向：模块不得反向 import index.js，且不得有环', () 
 })
 
 check('基线本身不能变大（防止有人为了过检查去调高数字）', () => {
-  assert.ok(BASELINE_FILE_LINES['index.js'] <= 3119, 'index.js 基线不允许上调')
+  assert.ok(BASELINE_FILE_LINES['index.js'] <= 3116, 'index.js 基线不允许上调')
   const total = Object.values(BASELINE_FUNCTION_LINES).reduce((sum, n) => sum + n, 0)
   assert.ok(total <= 4219, `长函数基线总和 ${total} 超过上限；只允许下降`)
 })

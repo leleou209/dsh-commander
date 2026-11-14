@@ -11,9 +11,9 @@ import assert from 'node:assert/strict'
 import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { computeCodeState, describeGitHead } from '../code-state.js'
-import { parseDecision } from '../protocol.js'
-import { createTranslator, localeKeyDiff, messageKeys, resolveLocale } from '../messages.js'
+import { computeCodeState, describeGitHead } from '../lib/code-state.js'
+import { parseDecision } from '../lib/protocol.js'
+import { createTranslator, localeKeyDiff, messageKeys, resolveLocale } from '../lib/messages.js'
 
 const checks = []
 const check = (name, fn) => checks.push({ name, fn })
@@ -147,6 +147,17 @@ check('文案：参数占位符被替换，缺参数原样保留', () => {
   const t = createTranslator('zh-CN')
   assert.ok(t('persist.file', { path: '/tmp/x' }).includes('/tmp/x'))
   assert.ok(t('persist.file', {}).includes('{path}'))
+})
+
+check('P2 相位落账：响应按当前相位现算，且「选挡位顺手启动」走 startWithPhase', async () => {
+  const source = await fsp.readFile(new URL('../index.js', import.meta.url), 'utf8')
+  assert.match(
+    source,
+    /phase: phaseTracker\.phaseOf\(/,
+    'stateJson 必须在响应时现算 phase（否则启动后仍回 none）',
+  )
+  const startBlock = source.slice(source.indexOf("if (normalized !== 'off' && agent && !hasCommander)"))
+  assert.match(startBlock.slice(0, 600), /startWithPhase\(/, '选挡位顺手启动必须走 startWithPhase 才能落账')
 })
 
 let failed = 0

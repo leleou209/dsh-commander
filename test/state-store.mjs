@@ -8,7 +8,7 @@ import assert from 'node:assert/strict'
 import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { STATE_SCHEMA, createStateStore, migrateState } from '../state-store.js'
+import { STATE_SCHEMA, createStateStore, migrateState } from '../lib/state-store.js'
 
 const checks = []
 const check = (name, fn) => checks.push({ name, fn })
@@ -100,7 +100,7 @@ check('平铺格式（最老）也能读', () => {
   assert.equal(migrated.schema, STATE_SCHEMA)
 })
 
-check('schema 3 的退役 takeover 表：读得进但不进内存，写一次就消失', async () => {
+check('2.9.60 起 takeover 表重新启用：旧文件里的挡位照常读进来并继续落盘', async () => {
   const { file } = await tempState()
   await fsp.writeFile(
     file,
@@ -108,7 +108,6 @@ check('schema 3 的退役 takeover 表：读得进但不进内存，写一次就
       schema: 3,
       version: '2.9.34',
       tables: {
-        // 退役表：还留在旧文件里，不该被复活。
         takeover: { 'session-x': { state: 'full' } },
         rounds: { root1: { count: 7 } },
       },
@@ -116,14 +115,15 @@ check('schema 3 的退役 takeover 表：读得进但不进内存，写一次就
   )
   const store = await createStateStore({ path: file, pluginVersion: 'test' })
   assert.equal(store.state.migratedFrom, 'schema 3', 'schema 变化必须记录迁移来源')
-  assert.equal(store.counts().takeover, undefined, 'takeover 不在 STATE_TABLES 里')
-  assert.equal(store.state.tables.takeover, undefined, '退役表不进内存')
-  assert.equal(store.counts().rounds, 1, '活着的表照常读进来')
-  await store.put('rounds', 'root1', { count: 8 })
+  // 用户 2026-11-15 改口径"挡位要保存"：这张表不再是退役表，旧值直接可用。
+  assert.equal(store.counts().takeover, 1, 'takeover 重新在 STATE_TABLES 里')
+  assert.equal(store.state.tables.takeover['session-x'].state, 'full', '旧文件的挡位读得进内存')
+  assert.equal(store.counts().rounds, 1, '其它表照常读进来')
+  await store.put('takeover', 'session-x', { state: 'observe', source: 'user', at: 1 })
   const onDisk = JSON.parse(await fsp.readFile(file, 'utf8'))
   assert.equal(onDisk.schema, STATE_SCHEMA)
-  assert.equal(onDisk.tables.takeover, undefined, '落盘后退役表自然消失')
-  assert.equal(onDisk.tables.rounds.root1.count, 8)
+  assert.equal(onDisk.tables.takeover['session-x'].state, 'observe', '挡位要落盘（重启后不丢）')
+  assert.equal(onDisk.tables.rounds.root1.count, 7)
 })
 
 check('当前 schema 文件不算迁移（migratedFrom 为空）', async () => {

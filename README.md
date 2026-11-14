@@ -1,24 +1,61 @@
-# 指挥员模式（dsh-commander）
+# 决策托管（dsh-commander）
 
-长线工作的「指挥员模式」：把一个**长期在线、可续接的 Agent Teams teammate** 装成「指挥员」（架构设计 + 督察指挥）。它读全部项目文件、跑只读 shell、可写文件但默认不动手，并通过 `send_message` 与 Lead 多轮对话。斜杠命令 `/commander`。
+> **决策托管**：把「下一步做什么、做到什么算完成」的判断权，按你选的挡位托付给一个长期在线、可续接的指挥实体。执行这份托管的是**指挥员**；它的打包形态仍是**插件**（@local/dsh-commander）。命名分层见 [doc/NAMING.md](../doc/NAMING.md)。
 
-> 当前版本 **2.9.40**，见 [CHANGELOG.md](CHANGELOG.md)。安装见 [INSTALL.md](INSTALL.md)，最短路径：
->
-> ```sh
-> git clone https://github.com/leleou209/dsh-commander.git
-> # 然后在 DSH 会话里：
-> # plugin_manager install_bundle target: "<克隆路径>/dsh-commander"
-> ```
->
-> 装完 `/commander doctor` 一条命令自检。
+把一个**长期在线、可续接的 Agent Teams teammate** 装成「指挥员」（架构设计 + 督察指挥）。它读全部项目文件、跑只读 shell、可写 doc 但默认不动手，通过 `send_message` / `commander` 工具与主agent 多轮对话。斜杠命令 `/commander`。
+
+## 它解决什么问题
+
+- **自循环迭代开发（懒人持续开发）**：主agent 每轮停下 → 插件把「本轮输出 + 工具摘要」交给指挥员 → 指挥员给下一步 → 自动开下一轮。你给一个明确目标，剩下的是"跑—验—纠"的循环，不用一直按回车。
+- **把强模型的判断力借给弱模型**：指挥员可以是比主agent 更强的模型（或不同厂商的模型）。**指挥员负责判断与验收，主agent 负责动手**——弱模型也能产出被强模型把关过的结果。
+
+代价是真实的：**它放大你表达的清晰度**。需求明确、边界清楚，它就是加速器；需求含糊，它会用更多轮次和更多 token 把含糊放大成返工。
+
+## 什么时候值得用
+
+**适合**：长线、多批次、有可验收标准的工程任务；需要有人持续盯质量与一致性的重复迭代；你想把一段明确的需求交给一个能自己推进的系统；或者单纯的只是想尝试以小模型的消耗获取大模型的项目能力。
+
+**不适合**：一句话就能做完的事（直接问主agent 更快，或者使用不接管但是陪听的顾问模式）；需求本身模糊到无法验收（先想清楚再装）。
+
+为了使用者考虑，我们设计了四大协作文档（`doc/suggest.md` / `history.md` / `plan.md` / `agent.md`）：它们支持模糊迭代与意图溯源，但也会增加上下文，利弊兼存（详见下文「四份协作文档」）。
+
+## 模型怎么选（最重要的一条）
+
+- **不要用同类 / 同源模型当指挥员。** 它默认会挑"自己那种"模型——便宜、顺手、省配置。结果是两个同水平模型互相点头：token 烧完，质量不涨，还会一起把错误需求做得更彻底。
+- 至少满足其一：**比主agent 强一个量级**；或**来自不同厂商 / 不同训练路线**，让它拿到的视野与主agent 不同、甚至更全。
+- 尽可能使用能**较强设计架构**的模型作为指挥，这样会减少迭代次数和跨步，并兼容工作模型的能力，变相减少 token 消耗和 history 文件的堆积。
+
+## 三种模式的基础思路
+
+接管状态决定"谁握着方向盘"（用户从 composer 图标切换，`off` = 关掉指挥员）：
+
+| 模式 | 谁做决定 | 适合场景 |
+| --- | --- | --- |
+| `observe` 顾问 | 你和主agent 拍板，指挥员只给意见 | 想听判断但不想被拦 |
+| `partial` 部分接管（**默认**） | goal 变更与放行归指挥员，问用户自由 | 常规长线开发 |
+| `full` 全接管 | 指挥员驱动每一轮，主agent 自动被唤醒 | 你离开，让系统自己跑一段时间 |
+
+`full` 模式会把最后的判断权转移到指挥 agent 身上，由它代替你做决断——所以开启 `full` 之前，请确认指挥员已经真正理解你的需求。
 
 ## 代码结构
 
-模块图、依赖方向、各模块职责与行数、还留在 `index.js` 里的东西 → [ARCHITECTURE.md](ARCHITECTURE.md)。
+```text
+index.js           入口：apply() 组合层 + 工具层 + 斜杠命令层
+lib/               全部实现模块（15 个）
+COMMANDER-GUIDE.md 指挥员的"细则手册"（渐进式披露的第二层，按需读）
+test/ scripts/     守卫与开发脚本
+```
+
+根目录只留入口、文档与配置，其余模块都在 `lib/`。模块图、依赖方向、各模块职责与行数、还留在 `index.js` 里的东西 → [ARCHITECTURE.md](ARCHITECTURE.md)。
 
 规范由 `test/style.mjs` 强制（零依赖 lint）：单文件 ≤900 行、单函数 ≤120 行、禁空 `catch`（只注释的允许）、
 单行 ≤140 字符、禁反向 import 与循环依赖；历史遗留进 `BASELINE`，只降不升。
 `commander(action="checks")` 现在有 10 项（offline / takeover / handoff / regressions / state / manual / style / actions / guards / window）。
+
+**上下文成本（渐进式披露）**：指挥员的常驻提示词只放身份、权限边界、输出契约与硬规则（约 1k token），
+决策协议、批次节奏、goal 审批、汇报审查等细则放在 `COMMANDER-GUIDE.md`，需要时它自己读。
+所以贵模型每轮只为"每轮都要用的东西"付费，细则不重复计费。
+
 ## 形态：一个 teammate，不是每轮一张新卡
 
 - 指挥员是 Agent Teams 的 teammate；内部 target 为 `commander`（Agent Teams 要求 ASCII kebab-case），界面描述统一为「指挥员」。
@@ -52,11 +89,9 @@
 - 配置：`turns`（默认 15）、`messagesPerTurn`（默认 2，上限 = turns × 2 + 4 余量）、`debug`（写 `~/.dsh/commander/transcript-window.log`，记录每次真实请求的前后参数，便于验收）；
 - `commander status` / `doctor` 会显示真实生效值（如「最近 15 个 turn，单页上限 34 条」）。
 
-> 2.9.3–2.9.8 的旧实现只把 `minTurns` 抬到 15，方向反了，所以看起来「没有效果」；2.9.9 修正。
-
 ## 主agent服从规则
 
-> **新装的 agent 第一件事**：`commander(action="help")` 取说明书索引，再按 topic 取正文（`states` / `loop` / `tokens` / `goal` / `full` / `troubleshoot` / `antipatterns`）。完整文本也在 [AGENT-MANUAL.md](AGENT-MANUAL.md)。工具说明只保留「是什么 + 动作 + 硬门禁」，协议细节都在说明书里。
+> **新装的 agent 第一件事**：`commander(action="help")` 取说明书索引，再按 topic 取正文（`overview` / `models` / `states` / `loop` / `tokens` / `goal` / `full` / `report` / `troubleshoot` / `antipatterns`）。完整文本也在 [AGENT-MANUAL.md](AGENT-MANUAL.md)。工具说明只保留「是什么 + 动作 + 硬门禁」，协议细节都在说明书里。
 
 - 新任务/阶段开始前，先 `commander say` 汇报目标与计划，再 `wait` 取得指令；不要先问用户。
 - 每完成一个可验收阶段，先向指挥员汇报并 `wait`；收到「继续」才继续，收到「允许结束」才交付。
@@ -73,6 +108,7 @@
 |---|---|
 | `start` | 创建或接管唯一的 `commander` teammate；仅当会话没有 goal 时创建一次协作 goal。 |
 | `list` | 列出可寻址的指挥员 teammate 与历史可续接子agent。 |
+| `team` | 并列子agent 名单（status/depth/id），指挥员用它看 Lead 的并行工作。 |
 | `say` | 发咨询并登记 pending 请求，返回 `requestId`；**不阻塞**。 |
 | `wait` | **无超时**等待该请求结束：指挥员本轮结束即返回回复与 `decision`（继续/需澄清/允许结束）；若有工程组/子agent完成，提前返回 `interrupt`（只验收、不分发），保留 pending，处理后再 `wait`。 |
 | `cancel` | 取消 pending；指挥员继续跑也不再恢复等待。 |
@@ -133,16 +169,16 @@
 
 把主agent完成的实质行为倒序写入 `doc/history.md`，供指挥员下一轮参考。
 
-## 主agent 说明书（2.9.36 起，2.9.37 英文化）
+## 主agent 说明书（2.9.36 起；2.9.37 英文化；2.9.41 增 `models` 分段）
 
-工具说明只保留「是什么 + 动作清单 + 硬门禁 + 指路」（**621 字符**），**协议细节在说明书里**：
+工具说明只保留「是什么 + 动作清单 + 硬门禁 + 指路」（**635 字符**），**协议细节在说明书里**：
 
-- `commander(action="help")` → 索引（9 个分段，每段一行 + 「什么时候该看」）
+- `commander(action="help")` → 索引（10 个分段，每段一行 + 「什么时候该看」）
 - `commander(action="help", topic="loop")` → 该段正文
 
-分段：`overview`（是什么/不是什么）、`states`（接管四态各自拦什么）、`loop`（say → wait → 分流）、`tokens`（决定令牌/批准行/CODE_STATE 回显）、`goal`（goal 门禁三条硬规则）、`full`（换驾驶员：自动交接）、`report`（汇报五要素）、`troubleshoot`（doctor/checks/handoff 探针，先探针别猜）、`antipatterns`（都真踩过的坑）。
+分段：`overview`（是什么/不是什么）、`models`（**怎么挑指挥员模型**：别挑自己、拉一个量级或换训练路线）、`states`（接管四态各自拦什么）、`loop`（say → wait → 分流）、`tokens`（决定令牌/批准行/CODE_STATE 回显）、`goal`（goal 门禁三条硬规则）、`full`（换驾驶员：自动交接）、`report`（汇报五要素）、`troubleshoot`（doctor/checks/handoff 探针，先探针别猜）、`antipatterns`（都真踩过的坑）。
 
-单一事实源是 `manual.js`；[AGENT-MANUAL.md](AGENT-MANUAL.md) 由它生成，`test/manual.mjs` 逐字节比对防漂移。
+单一事实源是 `lib/manual.js`；[AGENT-MANUAL.md](AGENT-MANUAL.md) 由它生成，`test/manual.mjs` 逐字节比对防漂移。
 
 **说明书是英文单语**（2.9.37 起）：同样内容英文比中文省约 8% token，常驻的工具说明省约一半。**契约令牌仍是中文原样**（`决定：继续/需澄清/允许结束`、`批准：goal <动作>`、`适用状态：CS-…`）——它们是 `classifyReply()` 匹配的协议字面量，翻译等于改协议；说明书里对每个令牌给了英文解释。
 ## 四份协作文档（`doc/`）
@@ -153,7 +189,7 @@
 
 ## 持久化与状态文件（2.9.8 加固）
 
-状态放在 `~/.dsh/commander/state.json`（`statePath` 可改），由 `state-store.js` 管理：
+状态放在 `~/.dsh/commander/state.json`（`statePath` 可改），由 `lib/state-store.js` 管理：
 
 | 方面 | 行为 |
 | --- | --- |
@@ -188,7 +224,7 @@ checkCommands:
 
 ## 文案与语言
 
-用户可见文案集中在 `messages.js`：`zh-CN` 全量、`en` 兜底，key 由测试保证两边对齐；**缺 key 会显式输出 `⟦missing:<key>⟧` 并 warn**，不会静默回退成英文。
+用户可见文案集中在 `lib/messages.js`：`zh-CN` 全量、`en` 兜底，key 由测试保证两边对齐；**缺 key 会显式输出 `⟦missing:<key>⟧` 并 warn**，不会静默回退成英文。
 
 - 每条按「发生了什么 + 影响 + 下一步」写，实现术语只进日志；
 - 分级前缀 `[信息]/[注意]/[失败]`；「已生效」与「失败」不混用；
@@ -213,7 +249,6 @@ checkCommands:
 - `off` 不是"解除指挥"：指挥员留在后台睡觉，`commander(action=say|wait)` 会被拒绝并回一句「用户已切换至不指挥状态，指挥agent已休息，请自行思考」。要恢复就切回 `observe` 及以上。
 - composer 工具行（模型选择器与发送键之间）有一个**皇冠图标**：灰色=不运行职责、浅灰=顾问、蓝色=部分、琥珀=全接管。点开菜单选状态；如果指挥员还没起来，选「不接管」及以上会**顺手把它启动起来**，指挥员就以你选的状态进场。
 
-> 这就是 2.9.0–2.9.11 那条「每轮问用户都要先过指挥员」的收窄：只有 `full` 才拦。`off`/`observe` 下问凭据、选文件这类只有用户能答的问题不再白烧两轮。
 
 ## 全接管的自动交接（2.9.23 起，2.9.33 稳定）
 
@@ -269,8 +304,6 @@ goal 处于 `active + armed` 时，harness 会在**没有用户消息**时自动
 - goal 提醒文本里写明了这条流程，每轮都会出现在 agent 上下文里。
 - 指挥员契约要求：无法推进时主动 `批准：goal pause`，不要保持 active 空转。
 
-> 不采用「插件按轮数自动 block」的硬编码：那会把纯只读研究型 goal 也停掉，且绕过了指挥员的判断权。
-
 ## goal 规则
 
 - 指挥员可以直接管理 goal：`commander(action="goal", goalAction="create|edit|pause|resume|blocked|complete|clear", objective?, maxRounds?)`。
@@ -314,15 +347,45 @@ goal 处于 `active + armed` 时，harness 会在**没有用户消息**时自动
 
 ```sh
 node test/offline.mjs          # 工具/命令/门禁/doctor/checks
+node test/takeover.mjs         # 接管四态与门禁矩阵
+node test/handoff.mjs          # 全接管自动交接
 node test/regressions.mjs      # CODE_STATE、决议行、文案目录
 node test/state-store.mjs      # 权限、跨进程锁、损坏隔离、迁移、修剪
 node test/transcript-window.mjs
+node test/manual.mjs           # 说明书索引/正文/与 AGENT-MANUAL.md 一致
+node test/style.mjs            # 体量、空 catch、超长行、依赖方向（棘轮）
+node test/actions.mjs          # action 注册表单一事实源
+node test/guards.mjs           # 门禁判定真值表
 ```
+
+十条都在 `checkCommands` 里，`/commander checks <name>` 可让指挥员自己复跑。
 
 `test/regressions.mjs` 覆盖：CODE_STATE 解析真实提交号、内容哈希（touch 不误判）、只排除根部 `doc/`、决定行允许后缀说明、`zh-CN`/`en` key 对齐与缺 key 显式报错。
 `test/state-store.mjs` 覆盖改进点 5 的五条验收：0600/0700、锁住不覆盖、坏文件备份、旧版本迁移、表修剪。
 
 覆盖：teammate 只创建一次、`list/say/round` 不新建卡片、消息投递、goal 只创建一次且 round/say 不改动、paused goal 保持暂停、非主会话拒绝、写文件/构建命令被 guard 拒绝、事件与命令注册。
+
+## 会话日志修复（2.9.42）
+
+如果 GUI 报某条会话 `is corrupt: SessionFormatError: <type> does not match an open turn and step`，**数据没有烂**——只是日志里混进了一条结构越界的事件（通常来自旧版本在 `turn/end` 之后写的通知）。
+
+先体检（只读，不改文件）：
+
+```sh
+node scripts/repair-session.mjs "%USERPROFILE%\.dsh\sessions\<工作区目录>\<会话>\session.v4.jsonl.zstd"
+```
+
+它会报出越界事件的位置；确认是要丢的那条后修复：
+
+```sh
+node scripts/repair-session.mjs <同上路径> --drop-seq=17547 --apply
+```
+
+修复会先备份 `.bak-<时间戳>`，然后丢弃该事件、其后 `seq` 整体前移、重放校验、**按原帧结构**重新压缩写回。
+
+> ⚠️ 关键坑：DSH 的会话日志是「每帧一次 append」的多帧 zstd 流。把多帧压成单帧后宿主读不回来（会话会从界面上消失）。这个脚本按原帧边界重建，别再手工 `zstd -d | zstd -c` 覆盖。
+
+升级插件后请**重启 DSH**：`/commander doctor` 的「运行中 / 磁盘」不一致，说明进程里还是旧代码——2026-11-13 那次会话被写坏，直接诱因就是旧进程在跑 2.9.20 的写入路径。
 
 ## 已知限制
 

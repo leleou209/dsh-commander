@@ -10,7 +10,7 @@ import assert from 'node:assert/strict'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { COMMANDER_TOOL_DESCRIPTION } from '../manual.js'
+import { COMMANDER_TOOL_DESCRIPTION } from '../lib/manual.js'
 import {
   MANUAL_INDEX_MAX_LINES,
   MANUAL_TOPICS,
@@ -19,7 +19,7 @@ import {
   renderManualIndex,
   renderManualMarkdown,
   renderManualTopic,
-} from '../manual.js'
+} from '../lib/manual.js'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(here, '..')
@@ -99,6 +99,33 @@ check('说明书是英文单语，但契约令牌保持中文原样', () => {
   for (const token of ['决定：', '批准：goal', '适用状态：', '允许结束', '需澄清']) {
     assert.ok(all.includes(token), `契约令牌丢了：${token}`)
   }
+})
+
+check('渐进式披露的第二层（COMMANDER-GUIDE.md）存在、随包发布、且被常驻 prompt 指路', async () => {
+  const guidePath = path.join(repoRoot, 'COMMANDER-GUIDE.md')
+  const guide = await fsp.readFile(guidePath, 'utf8')
+  assert.ok(guide.length > 800, `COMMANDER-GUIDE.md 只有 ${guide.length} 字符，细则层等于空的`)
+  // 细则层不能反过来膨胀成第二个常驻 prompt
+  assert.ok(guide.length < 6000, `COMMANDER-GUIDE.md 有 ${guide.length} 字符，细则层也太长了`)
+  const pkg = JSON.parse(await fsp.readFile(path.join(repoRoot, 'package.json'), 'utf8'))
+  assert.ok(pkg.files.includes('COMMANDER-GUIDE.md'), 'package.json 的 files 里没有 COMMANDER-GUIDE.md，装完就丢')
+  // 常驻 prompt 必须给出绝对路径，否则指挥员读不到
+  const { buildCommanderPrompt } = await import('../lib/prompts.js')
+  const prompt = buildCommanderPrompt({
+    cwd: 'C:/repo',
+    goal: null,
+    docs: {
+      round: 1,
+      paths: { suggest: 'doc/suggest.md', history: 'doc/history.md', plan: 'doc/plan.md', agent: 'doc/agent.md' },
+      snapshot: { suggest: 'a', history: 'b', plan: 'c', agent: 'd' },
+    },
+    config: { commanderName: 'commander' },
+    modelLabel: 'test-model',
+    commanderId: 'id',
+    guidePath: 'C:/plugin/COMMANDER-GUIDE.md',
+  })
+  assert.ok(prompt.includes('C:/plugin/COMMANDER-GUIDE.md'), '常驻 prompt 没给细则层路径')
+  assert.ok(prompt.length < 2600, `常驻 prompt ${prompt.length} 字符，渐进式披露没生效（目标 <2600）`)
 })
 
 check('说明书不含密钥与本机绝对路径', () => {

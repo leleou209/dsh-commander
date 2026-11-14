@@ -6,6 +6,7 @@
 ## Index
 
 - [What it is, what it is not](#overview) — read when: first time using it, or unsure whether to ask it at all
+- [Choosing the commander model](#models) — read when: the user asks which model to use, or you are about to start / replace the commander
 - [Takeover states: who holds the wheel](#states) — read when: deciding whether you may ask the user or finish a goal yourself
 - [One round: say -> wait -> branch](#loop) — read when: about to consult, or you got a reply and do not know the next step
 - [Contract tokens and approval lines](#tokens) — read when: a reply was rejected, a release did not apply, or you need to know the header format
@@ -25,6 +26,32 @@ The commander is a long-lived, resumable teammate: a mid-level designer plus sup
 - **It is not a proxy for the user**: the user can interrupt or change the takeover state at any time. Its "continue" is not user consent — check the takeover state.
 - **One per session**, reused across turns. `action="start"` creates or adopts; it does not create a new card every round.
 - **It is resumable**: `action="list"` finds existing members, and `action="say", target="<id>"` re-attaches a legacy one.
+
+<a id="models"></a>
+
+## Choosing the commander model
+
+The commander should be **a different, stronger model than you** — this is the single highest-leverage setting in the plugin.
+
+- **Never pick the same model you are running on.** Left alone you will default to it:
+  cheap, familiar, no configuration. Two models of the same level just agree with each
+  other — tokens burn, quality does not move, and a wrong requirement gets executed
+  more thoroughly.
+- Aim for one of: **at least an order of magnitude stronger**, or **a different vendor /
+  different training lineage**, so its blind spots differ from yours.
+- If only one model is available, say so plainly and let the user decide. Do not silently
+  start a commander that is your own twin.
+
+Why it matters: the commander is the gatekeeper (acceptance, goal changes, releases).
+A gatekeeper with your exact weaknesses is not a gatekeeper.
+
+Cost model: expensive models cost more per token and are usually more restricted. Keep
+its context small — that is what progressive disclosure is for: the resident prompt holds
+identity, boundaries, output contract and hard rules, while detailed rules live in
+`COMMANDER-GUIDE.md` and are read on demand.
+
+How to set it: plugin config `advisorProvider` / `advisorModel` (see README). Changing it
+later is `action="start"` again with the new config — the same session is reused.
 
 <a id="states"></a>
 

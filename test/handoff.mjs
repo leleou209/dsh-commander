@@ -2,8 +2,8 @@
  * 自动交接（handoff）纯逻辑单测：何时交接、回复分类、两段渲染。
  */
 import assert from 'node:assert/strict'
-import { afterWait, classifyReply, HANDOFF_SOURCE, renderInstruction, renderReport, shouldHandoff } from '../handoff.js'
-import { createTranslator } from '../messages.js'
+import { afterWait, classifyReply, HANDOFF_SOURCE, renderInstruction, renderReport, shouldHandoff , shouldWakeParent } from '../lib/handoff.js'
+import { createTranslator } from '../lib/messages.js'
 
 const checks = []
 const check = (name, fn) => checks.push({ name, fn })
@@ -143,6 +143,26 @@ check('探针文案带 [探针] 前缀且两语言都在', () => {
   assert.ok(createTranslator('en')('handoff.probeNote').length > 20)
 })
 
+check('并行子agent 还在跑时不交接（2.9.46）', () => {
+  const base = { stopping: false, inFlight: false, isLead: true, takeover: 'full', status: 'idle', turnEnded: true, stopped: false, interrupted: false }
+  assert.equal(shouldHandoff(base), true, '常态下交接')
+  assert.equal(shouldHandoff({ ...base, subtreeBusy: true }), false, '子树忙 → 等收口再交接')
+  assert.equal(shouldHandoff({ ...base, subtreeBusy: false }), true)
+})
+check('shouldWakeParent（2.9.61）：退场后迟到的回复不许再点着主agent', () => {
+  // 等待期间用户把挡位从 full 切走 → 这条回复不再是交接指令
+  assert.equal(shouldWakeParent({ takeover: 'observe', stopped: false }), false)
+  assert.equal(shouldWakeParent({ takeover: 'partial', stopped: false }), false)
+  assert.equal(shouldWakeParent({ takeover: 'off', stopped: false }), false)
+  // 仍在全接管、也没停运 → 该唤醒
+  assert.equal(shouldWakeParent({ takeover: 'full', stopped: false }), true)
+  assert.equal(shouldWakeParent({ takeover: 'full' }), true)
+  // 插件停运/卸载是硬闸
+  assert.equal(shouldWakeParent({ takeover: 'full', stopped: true }), false)
+  // 读不到挡位一律不唤醒（宁可少一轮，也不凭空开一轮）
+  assert.equal(shouldWakeParent({}), false)
+  assert.equal(shouldWakeParent(), false)
+})
 let failed = 0
 for (const { name, fn } of checks) {
   try {

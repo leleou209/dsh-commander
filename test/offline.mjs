@@ -141,22 +141,34 @@ const resetGoalActive = () => {
 const members = [{ id: 'root-1', name: 'lead', role: 'lead', status: 'running' }]
 const spawnCalls = []
 const sentMessages = []
-const agentTeams = {
-  membership(agent) {
-    const member = members.find((row) => row.id === agent.id)
-    return member ? { role: member.role, name: member.name, root: { id: 'root-1' } } : undefined
+// 2.9.45：成员由「根会话下的可续接子agent」承担，走 ctx.subagents（DSH 0.2.2+）：
+//   startActivation 建、listDescendants 列、sendMessage 发。agentTeams 只剩任务板，这里不再需要。
+const subagents = {
+  rootOf: () => rootAgent,
+  async listDescendants() {
+    return members
+      .filter((row) => row.role === 'teammate')
+      .map((row) => ({ kind: 'child', id: row.id, name: row.name, label: '指挥员（架构设计 + 督察指挥）' }))
   },
-  listMembers: () => members.map((row) => ({ ...row })),
-  async spawnTeammate(caller, request) {
-    spawnCalls.push({ caller: caller.id, request })
-    const member = { id: 'teammate-1', name: request.name, role: 'teammate', status: 'provisioning' }
+  async startActivation(spec) {
+    spawnCalls.push({
+      caller: spec.parent?.id,
+      request: { name: spec.name, description: spec.label, prompt: spec.prompt, provider: spec.provider },
+    })
+    const member = { id: 'teammate-1', name: spec.name, role: 'teammate', status: 'provisioning' }
+    // 新 API 下成员状态以 agent 为准：把行状态代理到 commanderAgent，测试里的直接赋值仍然生效。
+    Object.defineProperty(member, 'status', {
+      get: () => commanderAgent.status,
+      set: (value) => { commanderAgent.status = value },
+      configurable: true,
+    })
     members.push(member)
     const agent = makeAgent(member.id, false)
     for (const fn of listeners.get('agent/created') ?? []) await fn({ agent })
-    return { member: { ...member, status: 'inactive' } }
+    return { id: member.id, name: member.name }
   },
-  async sendMessage(caller, request) {
-    sentMessages.push({ caller: caller.id, target: request.target, text: request.content?.[0]?.text ?? '' })
+  async sendMessage(caller, targetId, content) {
+    sentMessages.push({ caller: caller.id, target: targetId, text: content?.[0]?.text ?? '' })
     commanderAgent.status = 'running'
     return 'msg-1'
   },
@@ -198,6 +210,8 @@ const agentsService = {
 }
 
 const fakeCtx = {
+  // 插件里有直接 ctx.subagents 的访问（历史路径），假 ctx 必须同时给属性和 get()。
+  subagents,
   effect(executor) {
     executor()
     return () => {}
@@ -219,7 +233,7 @@ const fakeCtx = {
     const services = {
       agents: agentsService,
       goals,
-      agentTeams,
+      subagents,
       sessions: { get: (id) => sessions.get(id) },
       workingDirectory: { get: () => cwd, ensure: async () => cwd },
       agentDefaultModel: { currentSelection: () => ({ provider: 'fake', model: 'fake' }) },
@@ -250,7 +264,7 @@ const fakeCtx = {
     },
   },
   logger: { info() {}, warn() {}, error() {} },
-  subagents: { list: () => [], getProvider: () => undefined, listChildren: async () => [] },
+  list: () => [], getProvider: () => undefined, listChildren: async () => [],
 }
 
 plugin.apply(fakeCtx, {
@@ -274,13 +288,13 @@ let value = await commander.execute({ action: 'status' }, exec(rootAgent))
 assert.ok(value.text.includes('指挥员模式状态'))
 assert.ok(value.text.includes('未完成请求：（无）'))
 
-// 2) start creates teammate once + goal once
+// 2) start creates teammate once, and **no goal**（初始化不建 goal，2.9.57）
 value = await commander.execute({ action: 'start' }, exec(rootAgent))
 assert.equal(value.target, 'commander')
 assert.equal(spawnCalls.length, 1)
 assert.equal(spawnCalls[0].request.name, 'commander')
 assert.ok(spawnCalls[0].request.description.includes('指挥员'), 'new teammate description is 指挥员')
-assert.equal(goalCalls.filter((call) => call.op === 'create').length, 1)
+assert.equal(goalCalls.filter((call) => call.op === 'create').length, 0, '初始化不得创建 goal')
 assert.equal(selectCalls.length, 1, 'start selects configured advisor model')
 assert.equal(selectCalls[0].provider, 'fake-provider')
 assert.equal(selectCalls[0].model, 'fake-model')
@@ -289,7 +303,15 @@ assert.ok(spawnCalls[0].request.prompt[0].text.includes('写文件'))
 assert.ok(spawnCalls[0].request.prompt[0].text.includes('自己决定'))
 assert.ok(spawnCalls[0].request.prompt[0].text.includes('批次'), 'prompt defines batch rhythm')
 assert.ok(spawnCalls[0].request.prompt[0].text.includes('请求：'), 'prompt requires request id echo')
+assert.ok(spawnCalls[0].request.prompt[0].text.includes('骨肉优先于皮肤'), 'prompt states bone-before-skin priority')
+assert.ok(spawnCalls[0].request.prompt[0].text.includes('性能硬指标'), 'prompt requires measurable performance targets')
+assert.ok(spawnCalls[0].request.prompt[0].text.includes('回滚点'), 'prompt demands rollback points for aggressive refactors')
 
+// 2.9.46: 并列子agent 视图（指挥员看 Lead 的并行工作）
+value = await commander.execute({ action: 'team' }, exec(rootAgent))
+assert.ok(value.text.includes('并列子agent') || value.text.includes('Parallel subagents'), 'team action renders title')
+assert.ok(value.text.includes('teammate-1'), 'team action lists live subagent id')
+assert.ok(value.text.includes('指挥员'), 'commander row is tagged')
 const teammateAgent = { id: 'teammate-1' }
 const approvalGuard = guards[0]
 const guard = guards[1]
