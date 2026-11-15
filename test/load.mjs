@@ -24,9 +24,13 @@ const flush = () => new Promise((done) => setTimeout(done, 80))
  * ensureDocs 会真建文件，所以所有 cwd 都必须落在临时目录，绝不能是 process.cwd()。
  * 两个目录故意不同：SESSION_CWD 是会话自带的 cwd，SERVICE_CWD 是 workingDirectory
  * 服务给的值。cwd 解析必须以会话自带的为准——搞反了就会把 doc 写进 profile 目录。
+ *
+ * 目录名带**本次运行**的唯一后缀：曾经用固定名，上一次运行留下的 doc/ 会让下一次的
+ * 「不写服务目录」断言失败，结果同一个包时绿时红。
  */
-const SESSION_CWD = path.join(os.tmpdir(), 'cmdr-core-load-session-cwd')
-const SERVICE_CWD = path.join(os.tmpdir(), 'cmdr-core-load-service-cwd')
+const RUN_ID = `${process.pid}-${Date.now().toString(36)}`
+const SESSION_CWD = path.join(os.tmpdir(), `cmdr-core-load-session-${RUN_ID}`)
+const SERVICE_CWD = path.join(os.tmpdir(), `cmdr-core-load-service-${RUN_ID}`)
 
 const exists = async (target) => {
   try {
