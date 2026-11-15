@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-commander",
-  "version": "3.1.2",
+  "version": "3.1.3",
   "private": true,
   "type": "module",
   "description": "决策托管（dsh-commander）3.1.1 提纯版：建立并绑定一个常驻可续接的指挥员子agent，预热后待命；按接管挡位管住 goal 与问用户；全接管时自动交接。",
