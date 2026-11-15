@@ -112,6 +112,17 @@ check('cwd 解析优先会话自带的，绝不直取 workingDirectory.get(agent
   assert.ok(block.includes('logger?.warn?.('), '退回进程目录必须留告警（否则 doc 会被悄悄写到 profile 目录）')
 })
 
+check('门禁必须覆盖原生 goal 工具，不能只挡自家通道', () => {
+  const source = read('index.js')
+  assert.ok(source.includes('nativeGoalAction(exec.name, exec.arguments)'), 'tools.guard 必须翻译原生 goal 工具')
+  const gate = read('lib/gate.js')
+  assert.ok(gate.includes("create_goal: 'create'") && gate.includes("update_goal: 'action'"), '两个原生 goal 工具都要认')
+  // 顺带钉住：问用户的两个工具名、以及 off 下直连指挥员的拦截
+  assert.ok(gate.includes("'request_user_input'"), '问用户工具名要多认一个')
+  assert.ok(source.includes('directMessageDenial('), 'off 挡位要挡直连')
+  assert.ok(source.includes('mode: store.mode(rootId), commanderName'), '直连拦截要用显式挡位，不能用推导值（否则重启后误拦）')
+})
+
 check('index.js 只做装配：不含工具/路由/驱动的实现体', () => {
   const source = read('index.js')
   assert.ok(!source.includes('webServer.register({'), '路由实现应在 routes.js')
