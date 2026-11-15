@@ -1,198 +1,201 @@
-# dsh-commander
+# 决策托管（dsh-commander）
 
-**给 AI 请一位常驻指挥员：它不替你干活，它替你决定「该不该干、干完没有」。**
+> **决策托管**：把「下一步做什么、做到什么算完成」的判断权，按你选的挡位托付给一个长期在线、可续接的指挥实体。执行这份托管的是**指挥员**；它的打包形态是一个 DSH 插件。
 
-DeepSeek Harness（DSH）插件 · 决策托管 · Agent Teams · MIT
+一句话：**给 AI 请一位常驻指挥员——它不替你干活，它替你决定「该不该干、干完没有」。**
 
-`version` **3.1.1** ｜ 运行时 **2,155 行** ｜ 测试 **85 组全绿** ｜ 零外部依赖
+`3.1.1` ｜ 运行时 2,195 行 ｜ 测试 85 组全绿 ｜ 零外部依赖 ｜ MIT ｜ [版本与依赖](#版本与依赖)
 
-> 主 agent 负责执行，指挥员负责方向与验收。
-> 它们共处一个会话树，却**不互相点燃**——建立、预热、待命，全程零打扰。
+主 agent 负责执行，指挥员负责方向与验收。两者共处一个会话树，却**不互相点燃**：建立、预热、待命，全程零打扰。
 
-## 为什么需要它
+---
 
-让一个 agent 自己干三小时的活，最先崩的从来不是能力，是**判断**：
+## 它解决什么问题
 
-| 症状 | 没有指挥员 | 有指挥员 |
+- **自循环迭代开发**：主 agent 每轮停下 → 插件把「本轮输出 + 工具摘要」交给指挥员 → 指挥员给下一步 → 自动开下一轮。你给一个明确目标，剩下的是"跑—验—纠"的循环，不用一直按回车。
+- **把强模型的判断力借给弱模型**：指挥员可以是比主 agent 更强、或来自不同厂商的模型。**指挥员负责判断与验收，主 agent 负责动手**——弱模型也能产出被强模型把关过的结果。
+
+代价是真实的：**它放大你表达的清晰度**。需求明确、边界清楚，它就是加速器；需求含糊，它会用更多轮次和更多 token 把含糊放大成返工。
+
+## 什么时候值得用
+
+**适合**：长线、多批次、有可验收标准的工程任务；需要有人持续盯质量与一致性的重复迭代；想把一段明确的需求交给能自己推进的系统；或者只是想以小模型的消耗获取大模型的项目能力。
+
+**不适合**：一句话就能做完的事（直接问主 agent 更快，或改用"不接管但陪听"的顾问挡位）；需求本身模糊到无法验收（先想清楚再装）。
+
+## 模型怎么选（最重要的一条）
+
+- **不要用同类 / 同源模型当指挥员。** 它默认会挑"自己那种"模型——便宜、顺手、省配置。结果是两个同水平模型互相点头：token 烧完，质量不涨，还会一起把错误需求做得更彻底。
+- 至少满足其一：**比主 agent 强一个量级**；或**来自不同厂商 / 不同训练路线**，让它拿到的视野与主 agent 不同、甚至更全。
+- 尽可能用**擅长架构设计**的模型当指挥，这会减少迭代次数与跨步，并兼容工作模型的能力，变相减少 token 消耗与 `history.md` 的堆积。
+
+## 四个挡位
+
+挡位决定"谁握着方向盘"，从 composer 右侧的图标切换（鼠标停靠会显示当前挡位与代价）：
+
+| 挡位 | 谁做决定 | 适合场景 |
 | --- | --- | --- |
-| 干到一半自己宣布"完成了" | 你说没完成，它说完成了，来回拉锯 | `goal complete` 要指挥员的「允许结束」才放行 |
-| 悄悄把你在跑的目标暂停/改写 | 只能事后在日志里发现 | `edit/pause/blocked` 要「批准：goal <动作>」 |
-| 一遇到模糊就停下来问你 | 你被当成确认框点了一整天 | `full` 挡位下「问用户」也收归指挥员，你自己决定是否参与 |
-| 长任务中断就得从头讲一遍 | 上下文全丢 | 指挥员**常驻可续接**，预热时就把项目文档读进来 |
+| `off` | 只你。指挥员休息，所有门禁失效 | 临时要绝对控制权 |
+| `observe` | 你和主 agent 拍板，指挥员只给意见（**建立后的默认值**） | 想听判断但不想被拦 |
+| `partial` | goal 的变更与放行归指挥员，问用户自由 | 常规长线开发 |
+| `full` | 指挥员驱动每一轮，主 agent 自动被唤醒 | 你离开，让系统自己跑一段时间 |
 
-它管的是**三个判断点**（结束、改目标、问用户），不是替你写代码。所以你随时能把它调成"只当顾问"，或者干脆让它休息。
+`full` 会把最后的判断权交给指挥 agent 代替你决断——开启前请确认它已经真正理解你的需求。
 
-## 三种介入深度
+挡位**跨进程保存**（按根会话），重启后恢复；放行 / 批准 / 已咨询是本轮语义，重启即清。
 
-| 挡位 | 语义 | 适合 |
-| --- | --- | --- |
-| `observe` | 在场当顾问，主 agent 完全自由（**建立后的默认值**） | 想先看看它靠不靠谱 |
-| `partial` | goal 的 `complete` 要「允许结束」，`edit/pause/blocked` 要「批准」 | 长任务、不想被自己骗 |
-| `full` | 连「问用户」也归它，每轮自动交接 | 你走开，让它俩自己跑 |
-| `off` | 指挥员休息，所有门禁失效 | 临时要绝对控制权 |
-
-挡位**跨进程保存**（按根会话），重启后恢复；放行/批准/已咨询是本轮语义，重启即清。
-
-## 它是怎么工作的
+## 它怎么工作
 
 1. **建立并绑定**本会话的指挥员（`delivery: 'caller'`——宿主的完成推送被关掉，所以建完不会把主会话叫醒）；
-2. 让它**预热**（读 `doc/{suggest,history,plan,agent}.md`）然后**待命**；
-3. 按**接管挡位**管住 goal 与「问用户」，同时收紧指挥员自己的工具面（只读全盘 + 只读 shell + 只写 `doc/`）；
+2. 让它**预热**（读四份协作文档）然后**待命**；
+3. 按**挡位**管住三个判断点，同时收紧指挥员自己的工具面；
 4. **全接管**时自动交接：本轮结束 → 汇报 → 等指令 → 唤醒新一轮。
 
 初始化**不会**让主会话自动开工、**不会**建 goal、**不会**投递任何消息。
-代价是可见的：图标 tooltip 会写明预热花了多久、几步、几次工具、多少 token。
+代价是可见的：tooltip 会写明预热花了多久、几步、几次工具、多少 token，这份实测数字重启后仍在。
+
+> 建立后第一次调用要预填充整份工具表，通常 60–90 秒才出首字；此后走缓存。这段时间主会话不受影响，可以继续干活。
+
+## 三个判断点
+
+指挥员只盯这三处，不干预你写代码：
+
+| 判断点 | 没有指挥员 | 有指挥员（`partial` / `full`） |
+| --- | --- | --- |
+| **目标算不算完成** | 主 agent 自己宣布完成 | `goal complete` 要指挥员的「允许结束」才放行 |
+| **目标能不能改** | 可以悄悄暂停 / 改写你在跑的目标 | `edit` / `pause` / `blocked` 要「批准：goal <动作>」 |
+| **该不该问你** | 一遇模糊就停下来弹确认 | `full` 下问用户也收归指挥员，由它决定是否打扰你 |
+
+`paused` 的 goal 只能由你在界面恢复——模型无权 `resume`。
+
+## 权限边界
+
+指挥员是**只读的全知观察者 + 受控的作者**：
+
+| 能力 | 说明 |
+| --- | --- |
+| 读 | 全部项目文件（`read` / `glob` / `grep`） |
+| 跑 | 只读 shell（`pwsh` / `bash`；写操作、重定向、未知命令一律拦下） |
+| 写 | **只限 `doc/`**（四份协作文档） |
+| 联网 | `web_search` / `web_fetch` |
+| 对话 | `commander` / `commander_record` / `list_agents` / `send_message` |
+| 不做 | 改源码、装插件、动 profile、执行会改文件的命令 |
+
+工具面是**白名单**（13 项），默认不动手；要它真的改点什么，是你在对话里明确要求。
+
+## 四份协作文档
+
+| 文件 | 作用 |
+| --- | --- |
+| `doc/suggest.md` | 用户偏好与硬口径 |
+| `doc/history.md` | 已发生的实质行为（最新在上） |
+| `doc/plan.md` | 当前计划与历史轮次 |
+| `doc/agent.md` | 设计导向与编辑行为分化 |
+
+它们支持模糊迭代与意图溯源，但也会增加上下文，**利弊兼存**：文档越厚，预热越贵，指挥员越容易读到过期结论。建议只写"会影响下一次判断"的东西。
 
 ## 安装
 
 ```yaml
-# profile 的 cordis.patch.yml（或直接用包内自带的 cordis.patch.yml）
+# profile 的 cordis.patch.yml（包内自带一份同样内容）
 - insert:
     - id: commander
       name: '@local/dsh-commander'
       config:
-        provider: fork        # fork 复用父会话前缀以命中 KV cache；不可用时自动退 spawn
+        provider: fork          # fork 复用父会话前缀以命中 KV cache；不可用时自动退 spawn
         commanderName: commander
         docDir: doc
         enforceApproval: true
 ```
 
-客户端半（图标）有改动 → **刷新一次页面**；Host 半改版本需**重启**。
+客户端半（图标）改动 → **刷新一次页面**；Host 半改版本 → **重启**。
 
-配置项（都有默认值）：`toolName` / `recordToolName` / `commanderName` / `routePath` /
-`docDir` / `provider` / `statePath` / `enforceApproval` / `waitMs` / `pollMs` /
-`initTimeoutMs` / `shellTools` / `writeScopes` / `allow`。
+## 配置项
 
-状态文件 `~/.dsh/commander/state.json`，路由 `/commander/takeover`。
+全部有默认值，通常不用写：
 
-
-## 3.1.1 相对 3.0.1 去掉了什么
-
-| 去掉 | 3.0.1 行数 | 为什么 |
+| 键 | 默认 | 说明 |
 | --- | --- | --- |
-| `doctor` / `checks` / `coverage` / `client-probe` / `code-state` | ~807 | 校验工具自身的元机器，不是产品功能 |
-| `messages`（i18n）/ `manual`（分主题说明书）/ `transcript-window` | ~812 | 可选表面；个人插件双语收益低 |
-| `team.js` 同步成员桥 | 279 | **冷缓存就是「重启后图标不认指挥员」的根因** |
-| `takeover-store` 反向持有 Map | 87 | 同步读路径自加的约束，只有 `tools.guard` 真需要 |
-| `init-flow` 四态相位机 | 133 | 相位可由「在飞 / 失败 / 有指挥员」推导 |
-| `state-store` 重型持久化 | 309 → 143 | 只留原子写 + 锁 + 损坏隔离 |
-| 会话修复工具 + 完整性测试 | ~500 | 那是给一次写坏会话的事故善后 |
+| `toolName` / `recordToolName` | `commander` / `commander_record` | 暴露给模型的工具名 |
+| `commanderName` | `commander` | 指挥员在 Agent Teams 里的名字（也用于查重） |
+| `provider` | `fork` | 子会话建立方式；失败自动退 `spawn` |
+| `routePath` | `/commander/takeover` | 图标读写挡位的 HTTP 路由 |
+| `statePath` | `~/.dsh/commander/state.json` | 挡位与预热代价的落盘位置 |
+| `docDir` | `doc` | 四份协作文档所在目录 |
+| `enforceApproval` | `true` | 是否启用 goal 审批门禁 |
+| `waitMs` / `pollMs` | 20 min / 30 s | `wait` 的最长等待与轮询间隔 |
+| `initTimeoutMs` | 90 s | 建立超时（超时图标显示失败，可点击重试） |
+| `shellTools` | `pwsh` / `bash` / `shell` | 需要按只读规则审查的 shell 工具名 |
+| `writeScopes` | `['doc']` | 允许写的目录 |
+| `allow` | 见上方权限边界 | 指挥员的工具白名单 |
 
-## 三处结构性改动（这是简化的核心）
+## 版本与依赖
 
-**1. 成员不缓存。** `findCommander()` 每次按需 `await listDescendants`。
-没有缓存就没有冷缓存，也就没有「重启后不认人」那一类 bug。
+| 项 | 要求 |
+| --- | --- |
+| **DSH** | **≥ 0.2.2**（本版在 `0.2.2-rc.3` 上验证） |
+| Host 服务 | DSH 内置 base 提供的 `tools` / `subagents` / `webServer` / `workingDirectory`；缺 `subagents` 时插件会给出明确报错而不是静默失效 |
+| 客户端 | `@deepseek-ai/dsh-client-ui-conversation` 提供的 composer 槽位 `conversation.input.right` |
+| `fork` 后端 | `provider: fork` 需要 DSH 挂载 fork 后端；未挂载、或父会话还没有已完成轮次时，自动退 `spawn`（功能一致，只是首次请求要冷预填充） |
+| 可选 | `goals` 服务——没有它时 goal 门禁自动跳过，其余功能不受影响 |
 
-**2. 挡位一个缓存、两种访问器。** `store.mode(rootId)` 同步只给 `tools.guard`（宿主契约），
-其余读路径全 async。不再需要 store 反向持有外部 Map、hydrate/ready 那套舞蹈。
+## 代码结构
 
-**3. 相位由事实推导。** `inFlight` Map + 指挥员是否存在 → `none/provisioning/ready/failed`。
-不维护第三套状态机。
+```text
+index.js   307 行   只做装配：配置归一、服务取用、五个 effect 接线
+lib/      ~1,890 行  15 个模块，每个只管一件事
+test/               9 个测试文件，零依赖
+```
 
-## 保留的「配得上复杂度」的部分
-
-- **`lib/driver.js`（271 行）**：交接受并发约束，九道守卫每条都对应真实踩过的坑
-  （turn/end 触发、串行化、inFlight、基线防重发、看门狗、插话让位、并行收口、
-  dispose 停运、**唤醒前重读挡位**）。
-- **`lib/gate.js`（141 行）**：门禁真值表，纯函数穷举测试。
-- **`lib/consult.js`（119 行）**：咨询握手，**工具与驱动共用同一套**，避免两边判定漂移。
-
-## 体量对比
-
-| | 3.0.1 | 3.1.1 |
+| 模块 | 行数 | 职责 |
 | --- | --- | --- |
-| 运行时总行数 | 7,429 | **2,275** |
-| `index.js` | 3,115 | **294** |
-| 最长函数 | `apply` **2,473** 行 | `apply` **215** 行 |
-| 超 120 行的函数 | 多个（含 2473） | 3 个（215 / 170 / 145） |
+| `client.js` | 261 | composer 图标（React，子会话首帧就不渲染） |
+| `driver.js` | 259 | 全接管交接驱动 + 看门狗 |
+| `tools.js` | 173 | `commander` / `commander_record` 的工具面 |
+| `routes.js` | 154 | 图标用的 HTTP 路由（读路径全 async） |
+| `store.js` | 144 | 状态落盘（临时文件 + rename，跨进程加锁） |
+| `gate.js` | 129 | 门禁真值表（纯函数） |
+| `commander.js` | 119 | 建立 / 查找 / 收紧工具面 |
+| `consult.js` | 113 | 咨询握手（工具与驱动共用一份） |
+| `goal-link.js` | 106 | goal 联动 |
+| `preheat.js` | 99 | 从会话事件算预热代价 |
+| `handoff.js` | 86 | 交接守卫与决议解析 |
+| `modes.js` | 69 | 挡位定义与强弱分类 |
+| `prompt.js` | 61 | 指挥员提示词与文档清单 |
+| `protocol.js` | 60 | 回复契约（请求号 / 决议 / 批准 / 放行） |
+| `docs.js` | 55 | 四份文档的骨架与倒序追加 |
+
+三条结构性决定（也是三条静态不变量）：
+
+1. **成员不缓存**（每次按需向宿主查）→ 没有冷缓存，也就没有"重启后不认指挥员"这类问题；
+2. **挡位一个缓存两种访问器**（async 为主，同步只给 `tools.guard`）→ 不让 store 反向持有 Map；
+3. **相位由事实推导**（在飞 / 失败 / 有指挥员）→ 不需要第三套状态机。
 
 ## 测试
 
-```
-node test/modes.mjs         # 9   挡位真值表（weak→weak 零 goal 操作）
+```bash
+node test/modes.mjs         # 9   挡位真值表
 node test/gate.mjs          # 12  门禁：每道门该拦 2 条 + 不该拦 2 条
-node test/handoff.mjs       # 9   交接九道守卫 + 协议解析
-node test/store.mjs         # 8   落盘/恢复/损坏隔离/磁盘失败降级
+node test/handoff.mjs       # 9   交接守卫 + 协议解析
+node test/store.mjs         # 8   落盘 / 恢复 / 损坏隔离 / 磁盘失败降级
 node test/preheat.mjs       # 6   预热代价 + goal 决策
-node test/goal-link.mjs     # 5   goal 联动执行（失败只回报不回滚）
-node test/client-render.mjs # 10  React stub 真跑组件（TDZ / hooks 顺序 / 首帧）
-node test/load.mjs          # 13  **假宿主真跑 apply()**：接线/路由/init/切挡位/门禁/cwd/清理
+node test/goal-link.mjs     # 5   goal 联动
+node test/client-render.mjs # 10  React stub 真跑组件（hooks 顺序 / 首帧）
+node test/load.mjs          # 13  假宿主真跑 apply()：接线 / 路由 / init / 挡位 / 门禁 / cwd
 node test/invariants.mjs    # 13  架构不变量（防止简化被悄悄改回去）
 ```
 
-**85 项全绿**，并且在 `npm pack` 出来的**打包件内**重跑一遍也全绿（证明没有漏文件、路径没错）。
+**85 项全绿**，`npm pack` 产物内重跑同样全绿（证明没有漏文件）。零外部依赖，只用 `node`。
 
-`test/invariants.mjs` 是静态断言，钉住这次简化的关键决定：
-`delivery` 必须是 caller、初始化不得动 goal、成员不得缓存、唤醒前必须重读挡位、
-子会话判定必须在首帧、解析到指挥员必须立刻收紧工具面、路由必须等 `webServer` 就位、
-cwd 必须优先取会话自带的、`index.js` 只做装配。
+## 已知限制
 
-`test/load.mjs` 用假宿主把 `apply()` 真跑一遍——单测证明得了纯函数，证明不了接线。
-它已经抓到三个真问题（见下）。
+- 只读 shell 是 **best-effort 启发式**（命令白名单 + 重定向检查），不是沙箱。
+- 指挥员异常崩溃靠看门狗发现（默认 20 分钟上限），没有宿主的即时推送。
+- 未实现"切到全接管立刻补一次交接"：要等下一次 `turn end`。
+- 子会话的服务端 `canControl` 在"会话未打开且非已知指挥员"时 fail-open，第一道防线是客户端首帧判定。
+- 3.0.1 已封存在 `archive/`；两版默认工具名相同，**不要同时启用**。
 
-## 测试抓到的真问题（都已修）
+## License
 
-1. **重启后指挥员工具面没被收紧**（安全洞）：`commanderIds` 是内存态，重启即空；
-   路由发现"已有指挥员"就直接跳过 `ensureCommander`，于是**白名单从未生效**。
-   现在改为「解析到指挥员就登记并收紧」（`remember`），并有回归用例 +
-   静态不变量双保险。
-2. **测试污染**：假宿主的 `workingDirectory` 返回 `process.cwd()`，`ensureDocs`
-   因此在包目录里建了 `doc/`。已把沙箱指向临时目录。
-3. 打包漏文件：`lib/consult.js`、`lib/docs.js` 最初没进 `files[]`（装上会加载失败），
-   被新写的 `check-files` 自检抓到——这正是我在评审里指出过的那类坑。
-
-### 真机上抓到的两个（0.1.1 修）
-
-这两个假宿主原本测不出来，因为**假宿主比真宿主宽松**：
-
-4. **路由从未注册 → 图标全 404**：`lib/routes.js` 在 `apply` 里直接
-   `ctx.get('webServer')`。加载顺序稍变就是 `undefined`，接着 `return`，
-   此后再也不注册。真机表现：`/commander/takeover` 与随便写的路径**同样 404**，
-   `state.json` 永远不产生——客户端连一次挡位都没写成功。
-   现在改成 `ctx.inject(['webServer'], (webCtx) => webCtx.effect(...))`，
-   并在假宿主里加了 `holdWebServer` + `provide()`，能真正复现"服务晚到"。
-   （老包 `index.js:2992` 早就用注释警告过这件事，重写时又踩了一遍。）
-5. **cwd 解析错 → doc 写到 profile 目录**：`resolveCwd` 写成
-   `await workingDirectory.get(agent, signal)`，而宿主契约是 `get(session)`、
-   **同步返回**。于是永远拿不到，退回 `process.cwd()`——Electron 里那是
-   `~/.dsh/profiles/desktop`。真机表现：profile 下凭空多出 `doc/` 四件套，
-   里面躺着的正是本该写进项目的 `commander_record` 记录。
-   现在 `agent.session.cwd` 优先，服务调用只作兜底且传 `session`，
-   退回进程目录时 `logger.warn` 告警。
-
-
-## 为什么子agent"起来了却半天不说话"（实测账）
-
-真机日志（`~/.dsh/sessions/<ws>/<id>/session.v4.jsonl.zstd`）解出来的时间线：
-
-| 时刻 | 事件 | 说明 |
-| --- | --- | --- |
-| 0.00s | `subagent/descriptor` + `agent/inbox/spliced`（整份预热提示词）+ `turn/start` | **上下文注入是毫秒级** |
-| 0.16s | `step/start` | 请求已发出 |
-| **57.64s** | 首条 `assistant/message` | `inputTokens: 269237`、`cacheReadTokens` **缺省** → 冷预填充 |
-| 57.66s | 4 个 `read` 结果（doc 四件套） | 文档其实都是空骨架 |
-| 82.16s | 首条 `text`（26 字） | 第二轮 24.4s，`cacheRead: 269184` |
-
-结论：慢的不是注入，是**子会话的第一次模型调用要冷预填充整份工具表**——这个 profile 同时挂了
-rea / blender / unity 三个 MCP（一百多个工具，描述都很长）加几十个 skill，全在系统前缀里。
-`isSeeded: false` 说明**没有继承父会话历史**，那 269k 全是"环境固定开销"。
-
-三条对策（3.1.1）：
-
-1. **provider 默认改 `fork`**：fork 复用父会话逐字节相同的前缀，命中 KV cache；失败自动退 `spawn`。
-2. **预热代价落盘**：实测数字写进 `state.json`，重启后 tooltip 仍给得出"秒/步/工具/token"。
-3. **tooltip 说清为什么慢**：读不到代价时也写明"首次要预填充整份工具表，通常 60–90 秒，之后走缓存"。
-
-根治要减前缀（按 preset 裁剪工具面），这不在插件权限内——插件只能选 provider 和把代价讲明白。
-
-
-
-- 只读 shell 白名单是 **best-effort 启发式**，不是沙箱。
-- 指挥员异常崩溃靠看门狗发现（默认 20 分钟上限），不再有宿主的即时推送。
-- 子会话的服务端 `canControl` 在「会话未打开且非已知指挥员」时 fail-open；
-  第一道防线是客户端首帧判定。
-- 未实现「切到全接管立刻补一次交接」：要等下一次 `turn/end`。
-- 3.0.1 已封存在 `archive/`，两者默认工具名相同，**不要同时启用**。
-
-
+MIT
 
