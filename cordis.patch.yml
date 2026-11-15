@@ -4,7 +4,7 @@
 # 两者默认工具名相同，**不要同时启用**（否则工具名冲突）。
 - insert:
     - id: commander
-      name: '@lele/dsh-commander'
+      name: '@leleou209/dsh-commander'
       config:
         provider: fork
         commanderName: commander
