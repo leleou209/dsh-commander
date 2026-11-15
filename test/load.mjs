@@ -455,6 +455,18 @@ check('off 挡位：直接给指挥员发 send_message 也会被拦（不能绕�
   assert.equal(ping('someone-else'), undefined, '发给别人不管')
 })
 
+check('start 建立关系时把声明说一次（不额外占每轮提示词）', async () => {
+  const host = makeHost()
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'cmdr-core-start-'))
+  apply(host.ctx, { statePath: path.join(dir, 'state.json') })
+  await flush()
+  const tool = host.tools.find((entry) => entry.name === 'commander')
+  const out = await tool.execute({ action: 'start' }, { agent: rootAgent(), signal: new AbortController().signal })
+  assert.ok(out.text.includes('关系声明'), '建立回应里要有声明')
+  assert.ok(out.text.includes('指挥员不影响 agent team'), '声明原文要在')
+  assert.ok(out.text.includes('预热'), '原来的建立说明不能被顶掉')
+})
+
 check('清理：apply 注册的 disposer 全部可调用（不会在卸载时抛）', async () => {
   const host = makeHost()
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'cmdr-core-dispose-'))
