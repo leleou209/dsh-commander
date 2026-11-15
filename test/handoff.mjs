@@ -93,6 +93,13 @@ check('渲染：汇报带目标与工具摘要（超 16 条折叠），指令带
   assert.ok(instruction.includes('以用户最新指令为准'))
 })
 
+check('汇报里只在全接管链路要求维护 plan', () => {
+  const report = renderReport({ report: '本轮输出', tools: ['✓ read: doc/a.md'] })
+  assert.ok(report.includes('commander(action="plan")'), '全接管交接要提示先更新计划')
+  assert.ok(report.includes('doc/plan.md'), '要点名目标文件')
+  assert.ok(report.includes('决定：继续'), '契约行不能被顶掉')
+})
+
 let failed = 0
 for (const { name, fn } of checks) {
   try {
