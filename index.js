@@ -13,7 +13,7 @@
  *   - 相位由事实推导（在飞/失败/有指挥员）→ 没有第三套状态机；
  *   - 不含 doctor/checks/coverage/probe/code-state/manual/i18n/transcript-window/会话修复。
  *
- * @module @local/dsh-commander
+ * @module @lele/dsh-commander
  */
 
 import { homedir } from 'node:os'
