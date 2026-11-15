@@ -1,10 +1,57 @@
 {
   "name": "@local/dsh-commander",
-  "version": "3.0.1",
+  "version": "3.1.1",
   "private": true,
   "type": "module",
-  "description": "决策托管（dsh-commander）：一个长期在线、可续接的 Agent Teams teammate「指挥员」，负责架构设计、功能铺展与督察验收；可读全部文件、跑只读 shell 与受控检查命令、可写 doc 但默认不动手。",
+  "description": "决策托管（dsh-commander）3.1.1 提纯版：建立并绑定一个常驻可续接的指挥员子agent，预热后待命；按接管挡位管住 goal 与问用户；全接管时自动交接。",
   "license": "MIT",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./lib/client.js",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "README.md",
+    "cordis.patch.yml",
+    "icon.svg",
+    "index.js",
+    "lib/client.js",
+    "lib/commander.js",
+    "lib/consult.js",
+    "lib/docs.js",
+    "lib/driver.js",
+    "lib/gate.js",
+    "lib/goal-link.js",
+    "lib/handoff.js",
+    "lib/modes.js",
+    "lib/preheat.js",
+    "lib/prompt.js",
+    "lib/protocol.js",
+    "lib/routes.js",
+    "lib/store.js",
+    "lib/tools.js",
+    "test/client-render.mjs",
+    "test/gate.mjs",
+    "test/goal-link.mjs",
+    "test/handoff.mjs",
+    "test/invariants.mjs",
+    "test/load.mjs",
+    "test/modes.mjs",
+    "test/preheat.mjs",
+    "test/store.mjs"
+  ],
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
   "author": "leleou209",
   "homepage": "https://github.com/leleou209/dsh-commander#readme",
   "repository": {
@@ -23,76 +70,5 @@
     "commander",
     "goal",
     "orchestration"
-  ],
-  "exports": {
-    ".": "./index.js",
-    "./client": "./lib/client.js",
-    "./locale/*.json": "./locale/*.json",
-    "./icon": "./icon.svg",
-    "./transcript-window": "./lib/transcript-window.js"
-  },
-  "files": [
-    "AGENT-MANUAL.md",
-    "ARCHITECTURE.md",
-    "CHANGELOG.md",
-    "COMMANDER-GUIDE.md",
-    "INSTALL.md",
-    "README.md",
-    "cordis.patch.yml",
-    "icon.svg",
-    "index.js",
-    "lib/actions.js",
-    "lib/checks.js",
-    "lib/client-probe.js",
-    "lib/client.js",
-    "lib/code-state.js",
-    "lib/coverage.js",
-    "lib/doctor.js",
-    "lib/goal-link.js",
-    "lib/guards.js",
-    "lib/handoff-driver.js",
-    "lib/handoff.js",
-    "lib/init-flow.js",
-    "lib/manual.js",
-    "lib/messages.js",
-    "lib/preheat.js",
-    "lib/prompts.js",
-    "lib/protocol.js",
-    "lib/state-store.js",
-    "lib/takeover-store.js",
-    "lib/takeover.js",
-    "lib/team.js",
-    "lib/transcript-window.js",
-    "locale/*.json",
-    "scripts/repair-session.mjs",
-    "test/actions.mjs",
-    "test/client-render.mjs",
-    "test/coverage.mjs",
-    "test/goal-link.mjs",
-    "test/guards.mjs",
-    "test/handoff.mjs",
-    "test/init.mjs",
-    "test/manual.mjs",
-    "test/offline.mjs",
-    "test/probe.mjs",
-    "test/regressions.mjs",
-    "test/session-integrity.mjs",
-    "test/state-store.mjs",
-    "test/style.mjs",
-    "test/takeover.mjs",
-    "test/team.mjs",
-    "test/transcript-window.mjs"
-  ],
-  "dsh": {
-    "bundle": {
-      "patch": "./cordis.patch.yml"
-    },
-    "client": {
-      "platform": "web",
-      "immediately": true,
-      "inject": [
-        "@deepseek-ai/dsh-client-ui-conversation"
-      ]
-    }
-  }
+  ]
 }

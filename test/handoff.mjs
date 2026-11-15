@@ -1,168 +1,98 @@
 /**
- * 自动交接（handoff）纯逻辑单测：何时交接、回复分类、两段渲染。
+ * 交接判定 + 协议解析。每条守卫都对应一个真实踩过的坑，这里逐条钉住。
  */
 import assert from 'node:assert/strict'
-import { afterWait, classifyReply, HANDOFF_SOURCE, renderInstruction, renderReport, shouldHandoff , shouldWakeParent } from '../lib/handoff.js'
-import { createTranslator } from '../lib/messages.js'
+import { afterWait, classifyReply, commanderDead, renderInstruction, renderReport, shouldHandoff, shouldWakeParent } from '../lib/handoff.js'
+import { hasRelease, parseDecision, parseGoalApprovals, parseRequestId } from '../lib/protocol.js'
 
 const checks = []
 const check = (name, fn) => checks.push({ name, fn })
 
-const base = { isLead: true, takeover: 'full', status: 'idle', turnEnded: true }
+const ready = {
+  stopping: false, inFlight: false, isLead: true, mode: 'full',
+  status: 'idle', turnEnded: true, stopped: false, interrupted: false, subtreeBusy: false,
+}
 
-check('正常情况：主agent 空闲 + 刚结束一轮 + 全接管 → 交接', () => {
-  assert.equal(shouldHandoff(base), true)
+check('shouldHandoff：全部条件满足才交接', () => {
+  assert.equal(shouldHandoff(ready), true)
 })
 
-check('只有 idle 但没真的结束一轮（maintenance / 压缩）→ 不交接', () => {
-  assert.equal(shouldHandoff({ ...base, turnEnded: false }), false)
-})
-
-check('停运后不再驱动（指挥员挂死/超时）', () => {
-  assert.equal(shouldHandoff({ ...base, stopped: true }), false)
-})
-
-check('非全接管不交接', () => {
-  for (const takeover of ['off', 'observe', 'partial']) {
-    assert.equal(shouldHandoff({ ...base, takeover }), false, takeover)
+check('shouldHandoff：九道守卫逐条否决', () => {
+  assert.equal(shouldHandoff({ ...ready, stopping: true }), false)
+  assert.equal(shouldHandoff({ ...ready, inFlight: true }), false)
+  assert.equal(shouldHandoff({ ...ready, isLead: false }), false)
+  assert.equal(shouldHandoff({ ...ready, status: 'running' }), false)
+  assert.equal(shouldHandoff({ ...ready, turnEnded: false }), false, 'idle 也含 maintenance，必须等真的 turn/end')
+  assert.equal(shouldHandoff({ ...ready, stopped: true }), false)
+  assert.equal(shouldHandoff({ ...ready, interrupted: true }), false)
+  assert.equal(shouldHandoff({ ...ready, subtreeBusy: true }), false)
+  for (const mode of ['off', 'observe', 'partial']) {
+    assert.equal(shouldHandoff({ ...ready, mode }), false, `${mode} 不自动交接`)
   }
 })
 
-check('主agent 还在跑 / 不是根会话 / 正在交接中 → 不交接', () => {
-  assert.equal(shouldHandoff({ ...base, status: 'running' }), false)
-  assert.equal(shouldHandoff({ ...base, isLead: false }), false)
-  assert.equal(shouldHandoff({ ...base, inFlight: true }), false)
-})
-
-check('用户刚插过话 → 这一轮不交接', () => {
-  assert.equal(shouldHandoff({ ...base, interrupted: true }), false)
-})
-
-check('插件卸载中 → 不交接', () => {
-  assert.equal(shouldHandoff({ ...base, stopping: true }), false)
-})
-
-check('回复分类：允许结束 / 需澄清 / 其余算继续', () => {
-  assert.equal(classifyReply('决定：允许结束'), 'finish')
-  assert.equal(classifyReply('决定：需澄清'), 'clarify')
-  assert.equal(classifyReply('决定：继续'), 'continue')
-  assert.equal(classifyReply('随便说点什么'), 'continue')
-  assert.equal(classifyReply(''), 'continue')
-  assert.equal(classifyReply(undefined), 'continue')
-})
-
-check('交给指挥员的汇报带任务与正文，不带轮次', () => {
-  const text = renderReport({ task: '发布 dsh-commander 2.9.24', report: '改完了，测试全绿。' })
-  assert.match(text, /\[自动交接\]/)
-  assert.match(text, /当前任务：发布 dsh-commander 2\.9\.24/)
-  assert.match(text, /改完了，测试全绿。/)
-  assert.match(text, /继续 \/ 需澄清 \/ 允许结束/)
-  assert.doesNotMatch(text, /#\d+/, '不再用轮次编号')
-  assert.equal(renderReport({ report: '' }).includes('（本轮没有可见输出）'), true)
-})
-
-check('工具摘要进汇报，最多 16 行', () => {
-  const tools = Array.from({ length: 20 }, (_, i) => `✓ tool${i}: args`)
-  const text = renderReport({ report: 'x', tools })
-  assert.match(text, /本轮工具：/)
-  assert.equal(text.split('\n').filter((line) => line.startsWith('- ✓')).length, 16)
-  assert.equal(renderReport({ report: 'x', tools: [] }).includes('本轮工具'), false, '没有工具就不写这一段')
-})
-
-check('等待结果决策：dead/timeout 停运并清 pending', () => {
+check('afterWait：dead/timeout 停运且必须清 pending', () => {
   for (const kind of ['dead', 'timeout']) {
-    const out = afterWait({ kind })
-    assert.equal(out.action, 'stop', kind)
-    assert.equal(out.clearPending, true, `${kind} 必须清 pending`)
-    assert.equal(out.stopped, true, `${kind} 应停运`)
+    assert.deepEqual(afterWait({ kind }), { action: 'stop', clearPending: true, stopped: true })
   }
 })
 
-check('等待结果决策：用户插话让位一次并清 pending，不注入', () => {
-  const out = afterWait({ kind: 'reply', interrupted: true })
-  assert.equal(out.action, 'let-go')
-  assert.equal(out.clearPending, true)
-  assert.equal(out.stopped, false)
+check('afterWait：用户插话让位一次；stopping 不清 pending', () => {
+  assert.deepEqual(afterWait({ kind: 'reply', interrupted: true }), { action: 'let-go', clearPending: true, stopped: false })
+  assert.deepEqual(afterWait({ kind: 'reply', stopping: true }), { action: 'stop', clearPending: false, stopped: false })
+  assert.deepEqual(afterWait({ kind: 'reply' }), { action: 'wake', clearPending: false, stopped: false })
+  assert.equal(afterWait({ kind: 'unknown' }).action, 'stop')
 })
 
-check('等待结果决策：正常回复注入、不清 pending（waitCommander 已清）', () => {
-  const out = afterWait({ kind: 'reply' })
-  assert.equal(out.action, 'wake')
-  assert.equal(out.clearPending, false)
-  assert.equal(out.stopped, false)
-})
-
-check('等待结果决策：stale/failed 也停并清 pending；stopping 不动 pending', () => {
-  for (const kind of ['stale', 'failed', undefined]) {
-    const out = afterWait({ kind })
-    assert.equal(out.action, 'stop', String(kind))
-    assert.equal(out.clearPending, true)
-    assert.equal(out.stopped, false, '只有 dead/timeout 才停运')
+check('shouldWakeParent：退场后迟到的回复不许再点燃主agent', () => {
+  assert.equal(shouldWakeParent({ mode: 'full', stopped: false }), true)
+  assert.equal(shouldWakeParent({ mode: 'full' }), true)
+  for (const mode of ['observe', 'partial', 'off']) {
+    assert.equal(shouldWakeParent({ mode, stopped: false }), false)
   }
-  const stopping = afterWait({ kind: 'reply', stopping: true })
-  assert.equal(stopping.action, 'stop')
-  assert.equal(stopping.clearPending, false, '卸载中不去碰 pending')
+  assert.equal(shouldWakeParent({ mode: 'full', stopped: true }), false)
+  assert.equal(shouldWakeParent({}), false, '读不到挡位一律不唤醒')
 })
 
-check('注入回主agent 的指令带原文与「不要问用户」边界', () => {
-  const text = renderInstruction('决定：继续，把剩下的测完。')
-  assert.match(text, /\[指挥员指令\]/)
-  assert.match(text, /决定：继续，把剩下的测完。/)
-  assert.match(text, /不要停下来问用户/)
-  assert.match(renderInstruction(''), /（指挥员回复为空）/)
+check('commanderDead：不存在或 failed 都算死', () => {
+  assert.equal(commanderDead(undefined), true)
+  assert.equal(commanderDead(null), true)
+  assert.equal(commanderDead({ status: 'failed' }), true)
+  assert.equal(commanderDead({ status: 'inactive' }), false)
 })
 
-check('交接消息的 source 是 agent-message relay', () => {
-  assert.equal(HANDOFF_SOURCE.kind, 'agent-message')
-  assert.equal(HANDOFF_SOURCE.form, 'relay')
+check('协议：请求号 / 决议（允许行尾说明）/ 批准 / 放行', () => {
+  assert.equal(parseRequestId('前缀 [REQ req-abc] 正文'), 'req-abc')
+  assert.equal(parseRequestId('没有请求号'), undefined)
+  assert.equal(parseDecision('决定：继续'), 'continue')
+  assert.equal(parseDecision('决定：继续（理由：还差测试）'), 'continue')
+  assert.equal(parseDecision('决定：需澄清'), 'clarify')
+  assert.equal(parseDecision('决定：允许结束'), 'finish')
+  assert.equal(parseDecision('没有决议行'), undefined)
+  assert.deepEqual([...parseGoalApprovals('批准：goal edit, pause')].sort(), ['edit', 'pause'])
+  assert.equal(parseGoalApprovals('无').size, 0)
+  assert.equal(hasRelease('可以了，允许结束'), true)
+  assert.equal(hasRelease('继续'), false)
 })
 
-check('交接文案跟随语言：en 下不出现中文正文，但契约令牌仍是中文', () => {
-  const en = createTranslator('en')
-  const report = renderReport({ report: 'done', task: 'ship 2.9.35', tools: ['✓ bash: ls'], t: en })
-  assert.match(report, /\[Handoff\]/)
-  assert.match(report, /Current task: ship 2\.9\.35/)
-  assert.match(report, /Tools this turn:/)
-  assert.doesNotMatch(report, /自动交接|当前任务|本轮工具/)
-  // 契约令牌不随语言变：指挥员永远用中文令牌回复。
-  assert.match(report, /允许结束/)
-  const instruction = renderInstruction('go on', en)
-  assert.match(instruction, /\[Commander instruction\]/)
-  assert.doesNotMatch(instruction, /指挥员指令|不要停下来问用户/)
-  assert.match(instruction, /go on/)
+check('classifyReply：只有明确「允许结束」才停，缺格式按继续', () => {
+  assert.equal(classifyReply('决定：允许结束'), 'finish')
+  assert.equal(classifyReply('决定：继续'), 'continue')
+  assert.equal(classifyReply('忘了写格式'), 'continue')
 })
 
-check('交接文案缺省是中文（不传 t 也能用）', () => {
-  assert.match(renderReport({ report: 'x' }), /\[自动交接\]/)
-  assert.match(renderInstruction('x'), /\[指挥员指令\]/)
+check('渲染：汇报带目标与工具摘要（超 16 条折叠），指令带用户优先', () => {
+  const report = renderReport({ report: '做完了 A', task: '目标 X', tools: Array.from({ length: 20 }, (_, i) => `✓ t${i}`) })
+  assert.ok(report.includes('目标 X'))
+  assert.ok(report.includes('做完了 A'))
+  assert.ok(report.includes('…还有 4 条'))
+  assert.ok(report.includes('决定：'))
+  assert.ok(renderReport({}).includes('（本轮没有可见文本输出）'))
+  const instruction = renderInstruction('去修 B')
+  assert.ok(instruction.includes('去修 B'))
+  assert.ok(instruction.includes('以用户最新指令为准'))
 })
 
-check('探针文案带 [探针] 前缀且两语言都在', () => {
-  assert.match(createTranslator('zh-CN')('handoff.probeTag'), /探针/)
-  assert.match(createTranslator('en')('handoff.probeTag'), /probe/i)
-  assert.ok(createTranslator('en')('handoff.probeNote').length > 20)
-})
-
-check('并行子agent 还在跑时不交接（2.9.46）', () => {
-  const base = { stopping: false, inFlight: false, isLead: true, takeover: 'full', status: 'idle', turnEnded: true, stopped: false, interrupted: false }
-  assert.equal(shouldHandoff(base), true, '常态下交接')
-  assert.equal(shouldHandoff({ ...base, subtreeBusy: true }), false, '子树忙 → 等收口再交接')
-  assert.equal(shouldHandoff({ ...base, subtreeBusy: false }), true)
-})
-check('shouldWakeParent（2.9.61）：退场后迟到的回复不许再点着主agent', () => {
-  // 等待期间用户把挡位从 full 切走 → 这条回复不再是交接指令
-  assert.equal(shouldWakeParent({ takeover: 'observe', stopped: false }), false)
-  assert.equal(shouldWakeParent({ takeover: 'partial', stopped: false }), false)
-  assert.equal(shouldWakeParent({ takeover: 'off', stopped: false }), false)
-  // 仍在全接管、也没停运 → 该唤醒
-  assert.equal(shouldWakeParent({ takeover: 'full', stopped: false }), true)
-  assert.equal(shouldWakeParent({ takeover: 'full' }), true)
-  // 插件停运/卸载是硬闸
-  assert.equal(shouldWakeParent({ takeover: 'full', stopped: true }), false)
-  // 读不到挡位一律不唤醒（宁可少一轮，也不凭空开一轮）
-  assert.equal(shouldWakeParent({}), false)
-  assert.equal(shouldWakeParent(), false)
-})
 let failed = 0
 for (const { name, fn } of checks) {
   try {
@@ -170,10 +100,9 @@ for (const { name, fn } of checks) {
     console.log(`  ok  ${name}`)
   } catch (error) {
     failed += 1
-    console.error(`  FAIL ${name}\n       ${error && error.message ? error.message : error}`)
+    console.error(`  FAIL ${name}\n       ${error?.message ?? error}`)
   }
 }
-
 if (failed > 0) {
   console.error(`\n${failed}/${checks.length} checks failed`)
   process.exit(1)

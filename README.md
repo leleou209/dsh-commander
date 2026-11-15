@@ -1,418 +1,171 @@
-# 决策托管（dsh-commander）
+# dsh-commander
 
-> **决策托管**：把「下一步做什么、做到什么算完成」的判断权，按你选的挡位托付给一个长期在线、可续接的指挥实体。执行这份托管的是**指挥员**；它的打包形态仍是**插件**（@local/dsh-commander）。命名分层见 [doc/NAMING.md](../doc/NAMING.md)。
+指挥员**核心**：建立并绑定一个常驻可续接的指挥员子agent，预热后待命；按接管挡位管住 goal 与「问用户」；全接管时自动交接。
 
-把一个**长期在线、可续接的 Agent Teams teammate** 装成「指挥员」（架构设计 + 督察指挥）。它读全部项目文件、跑只读 shell、可写 doc 但默认不动手，通过 `send_message` / `commander` 工具与主agent 多轮对话。斜杠命令 `/commander`。
+这是从 `dsh-commander`（7,429 行运行时）抽出来的核心实现，**2,273 行**，行为口径一致。
+不是重写功能，是**去掉历史堆积**：外围工具、适配器、可选表面全部不带。
 
-## 它解决什么问题
+## 它做什么
 
-- **自循环迭代开发（懒人持续开发）**：主agent 每轮停下 → 插件把「本轮输出 + 工具摘要」交给指挥员 → 指挥员给下一步 → 自动开下一轮。你给一个明确目标，剩下的是"跑—验—纠"的循环，不用一直按回车。
-- **把强模型的判断力借给弱模型**：指挥员可以是比主agent 更强的模型（或不同厂商的模型）。**指挥员负责判断与验收，主agent 负责动手**——弱模型也能产出被强模型把关过的结果。
+1. **建立并绑定**本会话的指挥员（`delivery: 'caller'`）；
+2. 让它**预热**（读 `doc/{suggest,history,plan,agent}.md`）然后**待命**；
+3. 按**接管挡位**管住 goal 与「问用户」，并收紧指挥员自己的工具面；
+4. **全接管**时自动交接：本轮结束 → 汇报 → 等指令 → 唤醒新一轮。
 
-代价是真实的：**它放大你表达的清晰度**。需求明确、边界清楚，它就是加速器；需求含糊，它会用更多轮次和更多 token 把含糊放大成返工。
+初始化**不会**让主会话自动开工，**不会**建 goal，**不会**投递任何消息。
 
-## 什么时候值得用
+## 挡位
 
-**适合**：长线、多批次、有可验收标准的工程任务；需要有人持续盯质量与一致性的重复迭代；你想把一段明确的需求交给一个能自己推进的系统；或者单纯的只是想尝试以小模型的消耗获取大模型的项目能力。
+| 挡位 | 语义 |
+| --- | --- |
+| `off` | 指挥员休息：`say`/`wait` 拒绝，任何门禁都不生效 |
+| `observe` | 在场当顾问，主agent 完全自由（**建立后的默认值**） |
+| `partial` | goal 的 `complete` 要「允许结束」、`edit/pause/blocked` 要「批准：goal <动作>」 |
+| `full` | 连「问用户」也收归指挥员，且每轮自动交接 |
 
-**不适合**：一句话就能做完的事（直接问主agent 更快，或者使用不接管但是陪听的顾问模式）；需求本身模糊到无法验收（先想清楚再装）。
+挡位**跨进程保存**（按根会话），重启后恢复。放行/批准/已咨询是本轮语义，重启即清。
 
-为了使用者考虑，我们设计了四大协作文档（`doc/suggest.md` / `history.md` / `plan.md` / `agent.md`）：它们支持模糊迭代与意图溯源，但也会增加上下文，利弊兼存（详见下文「四份协作文档」）。
+## 安装
 
-## 模型怎么选（最重要的一条）
+```
+# 先停用 @local/dsh-commander（两者默认工具名都是 commander，会冲突）
+# 再把本目录加入 profile 的插件列表
+```
 
-- **不要用同类 / 同源模型当指挥员。** 它默认会挑"自己那种"模型——便宜、顺手、省配置。结果是两个同水平模型互相点头：token 烧完，质量不涨，还会一起把错误需求做得更彻底。
-- 至少满足其一：**比主agent 强一个量级**；或**来自不同厂商 / 不同训练路线**，让它拿到的视野与主agent 不同、甚至更全。
-- 尽可能使用能**较强设计架构**的模型作为指挥，这样会减少迭代次数和跨步，并兼容工作模型的能力，变相减少 token 消耗和 history 文件的堆积。
+客户端半有改动 → **刷新一次页面**。Host 半的 `PLUGIN_VERSION` 类常量不会热载，改版本需重启。
 
-## 三种模式的基础思路
+配置项（都有默认值）：`toolName` / `recordToolName` / `commanderName` / `routePath` /
+`docDir` / `provider` / `statePath` / `enforceApproval` / `waitMs` / `pollMs` /
+`initTimeoutMs` / `shellTools` / `writeScopes` / `allow`。
 
-接管状态决定"谁握着方向盘"（用户从 composer 图标切换，`off` = 关掉指挥员）：
+状态文件默认 `~/.dsh/commander/state.json`（与老包分开，可并存）。
+路由默认 `/commander/takeover`。
 
-| 模式 | 谁做决定 | 适合场景 |
+## 相对老包去掉了什么
+
+| 去掉 | 老包行数 | 为什么 |
 | --- | --- | --- |
-| `observe` 顾问 | 你和主agent 拍板，指挥员只给意见 | 想听判断但不想被拦 |
-| `partial` 部分接管（**默认**） | goal 变更与放行归指挥员，问用户自由 | 常规长线开发 |
-| `full` 全接管 | 指挥员驱动每一轮，主agent 自动被唤醒 | 你离开，让系统自己跑一段时间 |
+| `doctor` / `checks` / `coverage` / `client-probe` / `code-state` | ~807 | 校验工具自身的元机器，不是产品功能 |
+| `messages`（i18n）/ `manual`（分主题说明书）/ `transcript-window` | ~812 | 可选表面；个人插件双语收益低 |
+| `team.js` 同步成员桥 | 279 | **冷缓存就是「重启后图标不认指挥员」的根因** |
+| `takeover-store` 反向持有 Map | 87 | 同步读路径自加的约束，只有 `tools.guard` 真需要 |
+| `init-flow` 四态相位机 | 133 | 相位可由「在飞 / 失败 / 有指挥员」推导 |
+| `state-store` 重型持久化 | 309 → 143 | 只留原子写 + 锁 + 损坏隔离 |
+| 会话修复工具 + 完整性测试 | ~500 | 那是给一次写坏会话的事故善后 |
 
-`full` 模式会把最后的判断权转移到指挥 agent 身上，由它代替你做决断——所以开启 `full` 之前，请确认指挥员已经真正理解你的需求。
+## 三处结构性改动（这是简化的核心）
 
-## 代码结构
+**1. 成员不缓存。** `findCommander()` 每次按需 `await listDescendants`。
+没有缓存就没有冷缓存，也就没有「重启后不认人」那一类 bug。
 
-```text
-index.js           入口：apply() 组合层 + 工具层 + 斜杠命令层
-lib/               全部实现模块（15 个）
-COMMANDER-GUIDE.md 指挥员的"细则手册"（渐进式披露的第二层，按需读）
-test/ scripts/     守卫与开发脚本
-```
+**2. 挡位一个缓存、两种访问器。** `store.mode(rootId)` 同步只给 `tools.guard`（宿主契约），
+其余读路径全 async。不再需要 store 反向持有外部 Map、hydrate/ready 那套舞蹈。
 
-根目录只留入口、文档与配置，其余模块都在 `lib/`。模块图、依赖方向、各模块职责与行数、还留在 `index.js` 里的东西 → [ARCHITECTURE.md](ARCHITECTURE.md)。
+**3. 相位由事实推导。** `inFlight` Map + 指挥员是否存在 → `none/provisioning/ready/failed`。
+不维护第三套状态机。
 
-规范由 `test/style.mjs` 强制（零依赖 lint）：单文件 ≤900 行、单函数 ≤120 行、禁空 `catch`（只注释的允许）、
-单行 ≤140 字符、禁反向 import 与循环依赖；历史遗留进 `BASELINE`，只降不升。
-`commander(action="checks")` 现在有 10 项（offline / takeover / handoff / regressions / state / manual / style / actions / guards / window）。
+## 保留的「配得上复杂度」的部分
 
-**上下文成本（渐进式披露）**：指挥员的常驻提示词只放身份、权限边界、输出契约与硬规则（约 1k token），
-决策协议、批次节奏、goal 审批、汇报审查等细则放在 `COMMANDER-GUIDE.md`，需要时它自己读。
-所以贵模型每轮只为"每轮都要用的东西"付费，细则不重复计费。
+- **`lib/driver.js`（271 行）**：交接受并发约束，九道守卫每条都对应真实踩过的坑
+  （turn/end 触发、串行化、inFlight、基线防重发、看门狗、插话让位、并行收口、
+  dispose 停运、**唤醒前重读挡位**）。
+- **`lib/gate.js`（141 行）**：门禁真值表，纯函数穷举测试。
+- **`lib/consult.js`（119 行）**：咨询握手，**工具与驱动共用同一套**，避免两边判定漂移。
 
-## 形态：一个 teammate，不是每轮一张新卡
+## 体量对比
 
-- 指挥员是 Agent Teams 的 teammate；内部 target 为 `commander`（Agent Teams 要求 ASCII kebab-case），界面描述统一为「指挥员」。
-- 已有 teammate 卡片是在改名之前创建的，描述无法修改；`sessionController.rename` 对 teammate 会被“owned by subagent routing”拒绝。新会话/重建 teammate 才会显示「指挥员」描述。
-- 首次 `commander(action=start)` 创建；之后一直复用，**不会每轮新建**。
-- 它出现在 `list_agents` 中，可以直接 `send_message({ target: "commander", message: "..." })`，也可以走 `commander(action=say)`。
-- 消息是异步投递：Lead 发完可以继续干活，回复作为 teammate 消息到达，不阻塞 goal。
-- 旧的 `commander-<uuid>` 子agent卡片不会被删除；`commander(action=list)` 会列出它们，并可用 `commander(action=say, target="<旧 id>")` 重新链接、继续对话。
+| | 老包 | 本包 |
+| --- | --- | --- |
+| 运行时总行数 | 7,429 | **2,275** |
+| `index.js` | 3,115 | **294** |
+| 最长函数 | `apply` **2,473** 行 | `apply` **215** 行 |
+| 超 120 行的函数 | 多个（含 2473） | 3 个（215 / 170 / 145） |
 
-## 它能做什么（权限边界）
-
-| 能力 | 说明 |
-|---|---|
-| 读全部文件 | `read / glob / grep / read_image`，工作区内外都可读（受宿主文件策略约束） |
-| 只读 shell | 白名单按“命令首 token”判断（支持 `git -C <path> <子命令>`）：`git status/log/diff/rev-parse`、`rg`、`sha256sum`、`stat`、`date`、`sed -n`、`jq` 等；`node`、`sed -i`、重定向、构建命令一律拒绝 |
-| 自主决策 | 大多数问题由指挥员依据 `doc/suggest.md` 与用户已有需求自行决定；只有会改变用户需求/产品语义且无法判断的事项才请 Lead 决策 |
-| 多轮对话 | 同一 teammate 会话持续累积上下文，可反复追问 |
-| 找 Lead / 队友 | 允许 `send_message`、`list_agents`（Agent Teams 自带工具） |
-| 写文件 | 有 `write / edit` 权限，但默认限制在 `doc/`（`writeScope`）；写代码会拒绝，提示词也要求默认不动手 |
-| shell 写 / 改仓库 / 编译 | **拒绝**：白名单外命令、重定向、git 写操作、构建/编译一律拦截 |
-| 创建子agent | **拒绝**（它只是指挥循环，不替代工程组） |
-
-> 只读 shell 是保守白名单拦截，不是强沙箱：命令必须落在白名单内，且禁止重定向/子表达式；但不能证明任意脚本都无副作用。需要更强边界时请用只读文件系统沙箱。
-
-## 伴生 UI 窗口（transcript-window，默认启用）
-
-随 commander 同包启用的 Host 侧伴生插件：把客户端加载历史时的窗口收敛到**最近 15 个 turn**（单页上限 34 条消息），更早的记录仍可按页向前加载。
-
-- 只改 `sessionController.events` / `observeEvent` 收到的请求参数，不删 session log、不改模型上下文；
-- 关键在**只压不放**：`turnWindow.minTurns` 是「最小值」，抬高它只会让服务端给得更多；真正的上限是 `maxMessages`。所以这里把 `maxMessages`、`minTurns`、`minMessages` 一律**向下压**，客户端要得更少就照办、绝不放大；
-- 配置：`turns`（默认 15）、`messagesPerTurn`（默认 2，上限 = turns × 2 + 4 余量）、`debug`（写 `~/.dsh/commander/transcript-window.log`，记录每次真实请求的前后参数，便于验收）；
-- `commander status` / `doctor` 会显示真实生效值（如「最近 15 个 turn，单页上限 34 条」）。
-
-## 主agent服从规则
-
-> **新装的 agent 第一件事**：`commander(action="help")` 取说明书索引，再按 topic 取正文（`overview` / `models` / `states` / `loop` / `tokens` / `goal` / `full` / `report` / `troubleshoot` / `antipatterns`）。完整文本也在 [AGENT-MANUAL.md](AGENT-MANUAL.md)。工具说明只保留「是什么 + 动作 + 硬门禁」，协议细节都在说明书里。
-
-- 新任务/阶段开始前，先 `commander say` 汇报目标与计划，再 `wait` 取得指令；不要先问用户。
-- 每完成一个可验收阶段，先向指挥员汇报并 `wait`；收到「继续」才继续，收到「允许结束」才交付。
-- **问题分级**：单点疑问/小 bug → 指挥员直接答、主agent直接修；方向性/多步工作 → 按批次（3–7 个可验收项或一个完整交付物）连续完成再汇报。不要把小问题包装成计划。
-- **批次节奏**：批次内小取舍自行决定，只有整批完成、真正阻塞或需用户拍板才回报。
-- 只有指挥员回「需澄清」或明确要求用户拍板时，才 `ask_user_question`；未咨询指挥员就直接问用户会被工具拒绝。
-- goal 提醒、工具描述与 guard 三层同时约束。
-
-## 工具
-
-### `commander`
-
-| action | 行为 |
-|---|---|
-| `start` | 创建或接管唯一的 `commander` teammate；仅当会话没有 goal 时创建一次协作 goal。 |
-| `list` | 列出可寻址的指挥员 teammate 与历史可续接子agent。 |
-| `team` | 并列子agent 名单（status/depth/id），指挥员用它看 Lead 的并行工作。 |
-| `say` | 发咨询并登记 pending 请求，返回 `requestId`；**不阻塞**。 |
-| `wait` | **无超时**等待该请求结束：指挥员本轮结束即返回回复与 `decision`（继续/需澄清/允许结束）；若有工程组/子agent完成，提前返回 `interrupt`（只验收、不分发），保留 pending，处理后再 `wait`。 |
-| `cancel` | 取消 pending；指挥员继续跑也不再恢复等待。 |
-| `status` | 只读查看文档、goal、teammate、pending 请求、**当前 CODE_STATE**、持久化健康、放行状态与问用户门禁。 |
-| `goal` | 管理 goal：`goalAction` = create/edit/pause/resume/blocked/complete/clear；与 `update_goal` 走**同一套门禁**（不是后门）。 |
-| `doctor` | 一条命令自检：安装/运行态/持久化/门禁/UI 窗口/环境，输出 PASS/WARN/FAIL + 下一步建议；`fix: true` 才纠正权限与修剪。 |
-| `checks` | 运行**配置里**的受控检查命令（`checkCommands`），返回退出码、耗时与输出尾部；不给 `name` 时列出可用项。 |
-| `help` | 取**主agent 说明书**：不给 `topic` 返回索引（每个分段一行 + 什么时候该看），给 `topic` 返回该段正文。纯本地文本，不碰宿主。 |
-| `handoff` | 交接探针：`probe="checks"` 报告判定条件与 `lastSkip`/`lastError`；`probe="send"` 真发一次汇报（带 `[探针]` 前缀、不留 pending、不注入）。 |
-
-### 斜杠命令 `/commander`
-
-```text
-/commander 你帮我检索 X 并统计下来      # 直接跟需求 → 按咨询发给指挥员
-/commander start|status|wait|cancel     # 子命令照旧
-/commander doctor                       # 一条命令自检（PASS/WARN/FAIL + 下一步）
-/commander doctor --fix                 # 同一个自检，顺手纠正权限/修剪历史
-/commander checks                       # 列出配置的受检命令
-/commander checks offline               # 跑一条（拿退出码与输出尾部）
-/commander record 修复了登录 500         # 写 doc/history.md
-/commander help                          # 用法（不带参数也是它）
-```
-
-- 参数不是已知子命令时，**整段按咨询投递**，不再报「未知子命令」；指挥员还没创建时会先自动创建。
-- 只有「看起来像英文子命令但拼错」才报错并提示正确写法（如 `statsu` → `status`），避免把拼写错误当成需求发出去。
-- 中文别名：`启动/开始/列表/状态/自检/体检/检查/说/问/等待/取消/记录/帮助`。
-- 投递后立即返回（不阻塞）；要拿结论再 `/commander wait`，或让主agent调 `commander action=wait`。
-
-### 决策与放行协议（改编自 Luna advisor loop）
-
-- 指挥员每轮回复必须以 `决定：继续` / `决定：需澄清` / `决定：允许结束` 开头。
-- `继续` 必须给下一轮工作、依据与验收标准；`需澄清` 给具体缺口；`允许结束` 必须附「适用状态 / 验收结论 / 验证证据 / 未完成必做项 / 已知限制」。
-- 每条回复头部还必须有一行 `请求：<REQ id>`，与 Lead 消息里的 `[REQ ...]` 一致；缺 REQ 按 failed 提示；旧请求的迟到回复（REQ 不匹配）会被忽略，等待继续。
-- **无隐式放行**：普通回复、超时、interrupt、工具完成、“本轮完成”都不算放行；决策令牌只认**第一条非空行**，正文里提到“允许结束”不会误放行。
-- **代码状态绑定**：`say` 会自动带上 `[CODE_STATE …]`（**只绑文件内容快照**：相对路径 + 内容哈希；排除工作区根部的 `doc/`；**不含 git HEAD**）；`允许结束` 必须回显同一个 token，且 `wait` 会**重算当前状态**；内容一变放行即失效。
-  - 不含 HEAD 的原因：提交本身不改内容，不该让放行失效；而「只提交 `doc/`」也会移动 HEAD —— 绑它等于让文档提交误伤放行。提交号仍在 `status`/`doctor` 里展示（标注“不绑定”）。
-- 只有 `允许结束` 才会登记放行；`write/edit/apply_patch` 与**会写文件的 shell 命令**会立即让放行失效，只读 `git status` / `Get-Content` 不会。
-- 放行写入插件自有状态文件（`~/.dsh/commander/state.json`，可用 `statePath` 改），插件重载/重启后会重新 hydrate；`update_goal complete` 前还有异步状态校验，外部改代码也会被拒绝。
-- 启用 `enforceApproval`（默认开）时，没有有效放行的 `update_goal(complete)` 会被 Host 拒绝。
-- **goal 状态/内容变更**（`edit/pause/blocked`）必须先取得指挥员在回复开头单独一行 `批准：goal <动作>`；正文示例/引用里的批准无效，并会在 `wait` 输出提示；`complete` 只认 `决定：允许结束`。
-- **paused goal 只能由用户在界面恢复**：模型/指挥员无权 `resume`；插件不再提供 resume 批准，guard 直接拒绝并提示用户手动恢复。
-- 指挥员对模糊需求按最可能意图推断并给推荐，不反复追问；只有不可逆/改变产品语义/成本明显时才需澄清。
-- `status` 显示真实指挥轮次、最后决定、pending、放行状态与 goal 批准。
-- 主agent的 `say` 汇报应包含：轮次/指令、改动、验证命令与结果、问题/风险、代码版本（有 git 用 HEAD+diff；无 git 用文件快照/时间戳，不编造）。
-- 已存在的旧 teammate 在 `start` 时会自动收到一次「契约同步」消息，不需要重建。
-
-参数：`action`（必填）、`message`、`requestId`、`target`。
-
-等待协议：
-
-1. `say` → 拿到 `requestId`，pending 持久化。
-2. `wait` → 阻塞到“指挥员本轮结束”或“其他工程组/子agent 完成”。
-3. 收到 interrupt → 只做验收/记录，**不分发新工作**，然后再次 `wait`（同一 turn，不产生新 goal 轮次）。
-4. 用户中断 → pending 保留；下一轮看 `status` 决定是否 `wait` 恢复。
-5. 用户/主agent决定不等 → `cancel`。
-
-### `commander_record`
-
-把主agent完成的实质行为倒序写入 `doc/history.md`，供指挥员下一轮参考。
-
-## 主agent 说明书（2.9.36 起；2.9.37 英文化；2.9.41 增 `models` 分段）
-
-工具说明只保留「是什么 + 动作清单 + 硬门禁 + 指路」（**635 字符**），**协议细节在说明书里**：
-
-- `commander(action="help")` → 索引（10 个分段，每段一行 + 「什么时候该看」）
-- `commander(action="help", topic="loop")` → 该段正文
-
-分段：`overview`（是什么/不是什么）、`models`（**怎么挑指挥员模型**：别挑自己、拉一个量级或换训练路线）、`states`（接管四态各自拦什么）、`loop`（say → wait → 分流）、`tokens`（决定令牌/批准行/CODE_STATE 回显）、`goal`（goal 门禁三条硬规则）、`full`（换驾驶员：自动交接）、`report`（汇报五要素）、`troubleshoot`（doctor/checks/handoff 探针，先探针别猜）、`antipatterns`（都真踩过的坑）。
-
-单一事实源是 `lib/manual.js`；[AGENT-MANUAL.md](AGENT-MANUAL.md) 由它生成，`test/manual.mjs` 逐字节比对防漂移。
-
-**说明书是英文单语**（2.9.37 起）：同样内容英文比中文省约 8% token，常驻的工具说明省约一半。**契约令牌仍是中文原样**（`决定：继续/需澄清/允许结束`、`批准：goal <动作>`、`适用状态：CS-…`）——它们是 `classifyReply()` 匹配的协议字面量，翻译等于改协议；说明书里对每个令牌给了英文解释。
-## 四份协作文档（`doc/`）
-
-- `doc/suggest.md`：**仅用户**编写的建议板；指挥员每轮优先读它。插件只在缺失时建骨架。
-- `doc/history.md`：主agent用 `commander_record` 记录行动历史。
-- `doc/plan.md` / `doc/agent.md`：项目计划与设计导向的权威位置；指挥员有写权限但默认不动手，需要留痕时可写，或由主agent/用户维护。
-
-## 持久化与状态文件（2.9.8 加固）
-
-状态放在 `~/.dsh/commander/state.json`（`statePath` 可改），由 `lib/state-store.js` 管理：
-
-| 方面 | 行为 |
-| --- | --- |
-| 权限 | 目录 `0700`、文件 `0600`；`/commander doctor --fix` 可纠正被放宽的权限 |
-| 原子写 | 先写 `.tmp` 再 `rename`，不会出现半截文件 |
-| 跨进程 | `state.json.lock`（`O_EXCL`）；拿不到锁就**不覆盖**，`status`/`doctor` 报「另一个进程正在写」 |
-| 损坏 | JSON 解析失败 → 原文件改名 `state.json.broken-<ts>` → 空状态继续，`readError` 进 `status`/`doctor` |
-| 超大 | 超过 `stateMaxBytes`（默认 256KB）同样备份后重置 |
-| 修剪 | `interruptions`/`rounds` 保留最近 `stateKeepPerTable`（默认 200）个会话、默认 90 天 |
-| 迁移 | 读到旧 `version` 字段或平铺格式会迁移读取（`status` 显示「已从旧版本 … 迁移读取」），表不丢 |
-
-## 受控检查（`checks`）与自检（`doctor`）
-
-`checks` 让指挥员能**自己复跑验证**，而不是只采信 Lead 的结论：
-
-- 只有 `checkCommands` 里列出的命令能被执行，模型只能选名字、不能传任意参数；
-- 每条命令 `cwd` 在会话工作目录，超时 `checkTimeoutMs`（默认 180s）后被**整组进程杀掉**；
-- 输出截断为末尾 200 行 / 32KB，返回退出码与耗时；并发上限 1；
-- 它**不**解锁写操作，也不影响放行状态。
-
-配置示例：
-
-```yaml
-checkCommands:
-  - offline = node test/offline.mjs
-  - regressions = node test/regressions.mjs
-```
-
-`doctor`（`/commander doctor`）把这次排障要查的东西一次说完：安装目录与 profile 挂载是否一致、**三处版本是否一致**（profile 里装的 / 磁盘 `package.json` / 运行中进程）、teammate/goal 状态、状态文件路径/权限/读写错误/表计数、问用户门禁、历史窗口、cwd 与 CODE_STATE，最后给 PASS/WARN/FAIL 结论和下一步建议。默认只读，`--fix` 才动手。
-
-分级原则：**FAIL 只留给真故障**（挂载指向别的目录、状态文件不可写/写错误）；「配置期望未满足」（例如历史窗口没挂上）记 **WARN**，不影响使用。
-
-## 文案与语言
-
-用户可见文案集中在 `lib/messages.js`：`zh-CN` 全量、`en` 兜底，key 由测试保证两边对齐；**缺 key 会显式输出 `⟦missing:<key>⟧` 并 warn**，不会静默回退成英文。
-
-- 每条按「发生了什么 + 影响 + 下一步」写，实现术语只进日志；
-- 分级前缀 `[信息]/[注意]/[失败]`；「已生效」与「失败」不混用；
-- `locale` 支持 `zh-CN` / `en`（`zh`、`zh-Hans` 归一化到 `zh-CN`）。
-
-自动交接的正文（`handoff.*`，2.9.35 起）也走同一套文案：`renderReport()` / `renderInstruction()` 接受注入的 `t()`，不传则用 `zh-CN`。**例外是契约令牌**——「决定：继续 / 需澄清 / 允许结束」是协议的一部分，不随语言变，`en` 文案里保留中文令牌并附英文解释。
-
-## 接管状态（takeover，2.9.19）
-
-指挥员对主会话的接管程度有四个状态，决定**哪些门禁生效**：
-
-| 状态 | 含义 | 问用户 | goal 的 complete/edit/pause/blocked |
-| --- | --- | --- | --- |
-| `off` 不运行指挥职责（无指挥） | 指挥员休息：`say`/`wait` 直接拒绝 | 自由 | 自由 |
-| `observe` 不接管 | 指挥员只当顾问 | 自由 | 自由 |
-| `partial` 部分接管 | 接管 goal 命令与放行（**启动默认**） | 自由 | 需要放行/批准 |
-| `full` 全接管 | 你不在场，指挥员代言 | **必须先咨询** | 需要放行/批准 |
-
-- **只在启动指挥时初始化**：没有 teammate → `off`；有 teammate → 你显式选过的值，没选过就是 `partial`。接管宽度不再跟 goal 起落。
-- **不跨进程沿用**：接管状态只在内存里，重启后按启动口径重新初始化 —— 上一次的 `full` 不会在新进程里复活。`state.json` 里的 `takeover` 表已退役。
-- **不会因为你说过话而降级**（2.9.22 起）：`full` 保持到你手动改。你随时能中断、有时要插话，硬控制权在图标菜单上。
-- `off` 不是"解除指挥"：指挥员留在后台睡觉，`commander(action=say|wait)` 会被拒绝并回一句「用户已切换至不指挥状态，指挥agent已休息，请自行思考」。要恢复就切回 `observe` 及以上。
-- composer 工具行（模型选择器与发送键之间）有一个**皇冠图标**：灰色=不运行职责、浅灰=顾问、蓝色=部分、琥珀=全接管。点开菜单选状态；如果指挥员还没起来，选「不接管」及以上会**顺手把它启动起来**，指挥员就以你选的状态进场。
-
-
-## 全接管的自动交接（2.9.23 起，2.9.33 稳定）
-
-`full` 不是"加门禁"，是**换驾驶员**：主agent 每轮停下，输出自动交回指挥员，钩子等它的指令，再把指令注入回去唤醒新一轮。
+## 测试
 
 ```
-主agent 一轮结束（turn/end）
-  → 取本轮输出 + 工具摘要（✓/✗ 名字: 参数，最多 16 行）
-  → sendToCommander（登记 pending）
-  → 等回复（30s 探一次指挥员状态；dead/timeout 就停运并清 pending）
-  → 允许结束 → 停；其余 → agent.followup 注入 [指挥员指令] → 新一轮
+node test/modes.mjs         # 9   挡位真值表（weak→weak 零 goal 操作）
+node test/gate.mjs          # 12  门禁：每道门该拦 2 条 + 不该拦 2 条
+node test/handoff.mjs       # 9   交接九道守卫 + 协议解析
+node test/store.mjs         # 8   落盘/恢复/损坏隔离/磁盘失败降级
+node test/preheat.mjs       # 6   预热代价 + goal 决策
+node test/goal-link.mjs     # 5   goal 联动执行（失败只回报不回滚）
+node test/client-render.mjs # 10  React stub 真跑组件（TDZ / hooks 顺序 / 首帧）
+node test/load.mjs          # 13  **假宿主真跑 apply()**：接线/路由/init/切挡位/门禁/cwd/清理
+node test/invariants.mjs    # 13  架构不变量（防止简化被悄悄改回去）
 ```
 
-- **轮次不限**，只由指挥员声明任务完成来结束。
-- **中断就是中断**：用户发言只在"正等着指挥员回复"时算抢占，让位一次、清掉 pending，**不改接管状态**。
-- **停运可恢复**：指挥员挂死/超时后 `stopped=true`，重新设定一次接管状态即可恢复。
-- **`status` 的「自动交接」行**会给出状态与诊断计数（`idle×N，turn/end×M`、上次跳过原因、上次异常）。
-- 排查入口：`commander(action="handoff")` 报判定条件与各原语可用性；`probe="send"` 真发一次汇报并清掉 pending。
+**85 项全绿**，并且在 `npm pack` 出来的**打包件内**重跑一遍也全绿（证明没有漏文件、路径没错）。
 
-## 中断恢复
+`test/invariants.mjs` 是静态断言，钉住这次简化的关键决定：
+`delivery` 必须是 caller、初始化不得动 goal、成员不得缓存、唤醒前必须重读挡位、
+子会话判定必须在首帧、解析到指挥员必须立刻收紧工具面、路由必须等 `webServer` 就位、
+cwd 必须优先取会话自带的、`index.js` 只做装配。
 
-- **用户中断**：用户主动取消/打断、UI 暂停；记录 `source=user`，默认不自动恢复，但指挥员可显式 `批准：goal resume`。
-- **agent 自己断**：指挥员/插件执行的 pause/blocked；记录 `goalSource=agent`，会话恢复时自动 resume。
-- **异常中断**：`error`、`max-tokens`、父级/hook/dispose 等；记录 `source=abnormal`，自动 resume。
-- 插件通过 Host `goals` 服务恢复，已实测可 resume paused goal（模型 `update_goal` 仍会被宿主拒绝）。
-- 开关：`resumeOnAbnormal`（默认 true）。
-- 恢复后 pending 请求仍在 `commander status` 中，由主agent决定是否继续 `wait`。
+`test/load.mjs` 用假宿主把 `apply()` 真跑一遍——单测证明得了纯函数，证明不了接线。
+它已经抓到三个真问题（见下）。
 
-### 跨重启的陈旧 pending（2.9.10）
+## 测试抓到的真问题（都已修）
 
-进程重启后，旧 pending 对应的指挥员回合已经不存在，回复永远不会来。插件用 `process.uptime()` 反推**进程启动时刻**（插件重载不会刷新它，所以重载不受影响）：
+1. **重启后指挥员工具面没被收紧**（安全洞）：`commanderIds` 是内存态，重启即空；
+   路由发现"已有指挥员"就直接跳过 `ensureCommander`，于是**白名单从未生效**。
+   现在改为「解析到指挥员就登记并收紧」（`remember`），并有回归用例 +
+   静态不变量双保险。
+2. **测试污染**：假宿主的 `workingDirectory` 返回 `process.cwd()`，`ensureDocs`
+   因此在包目录里建了 `doc/`。已把沙箱指向临时目录。
+3. 打包漏文件：`lib/consult.js`、`lib/docs.js` 最初没进 `files[]`（装上会加载失败），
+   被新写的 `check-files` 自检抓到——这正是我在评审里指出过的那类坑。
 
-| 场景 | 行为 |
-| --- | --- |
-| `pending.sentAt` 早于进程启动 | 判定「陈旧」；`status` 标注「陈旧（来自上个进程，可直接重新 say）」 |
-| 对陈旧请求调 `wait` | 立即返回 `kind=stale` + 原因，不阻塞 |
-| 对陈旧请求调 `say` | 允许覆盖（先清理陈旧记录并记一条 info 日志），不再抛「已有未完成的请求」 |
+### 真机上抓到的两个（0.1.1 修）
 
-## 需要用户输入时怎么停（不硬编码）
+这两个假宿主原本测不出来，因为**假宿主比真宿主宽松**：
 
-goal 处于 `active + armed` 时，harness 会在**没有用户消息**时自动续轮。如果这一轮只是「等用户选方向/给时间窗」，就会连续空转；而用户不在线时，「等用户批准」本身不可能发生。
+4. **路由从未注册 → 图标全 404**：`lib/routes.js` 在 `apply` 里直接
+   `ctx.get('webServer')`。加载顺序稍变就是 `undefined`，接着 `return`，
+   此后再也不注册。真机表现：`/commander/takeover` 与随便写的路径**同样 404**，
+   `state.json` 永远不产生——客户端连一次挡位都没写成功。
+   现在改成 `ctx.inject(['webServer'], (webCtx) => webCtx.effect(...))`，
+   并在假宿主里加了 `holdWebServer` + `provide()`，能真正复现"服务晚到"。
+   （老包 `index.js:2992` 早就用注释警告过这件事，重写时又踩了一遍。）
+5. **cwd 解析错 → doc 写到 profile 目录**：`resolveCwd` 写成
+   `await workingDirectory.get(agent, signal)`，而宿主契约是 `get(session)`、
+   **同步返回**。于是永远拿不到，退回 `process.cwd()`——Electron 里那是
+   `~/.dsh/profiles/desktop`。真机表现：profile 下凭空多出 `doc/` 四件套，
+   里面躺着的正是本该写进项目的 `commander_record` 记录。
+   现在 `agent.session.cwd` 优先，服务调用只作兜底且传 `session`，
+   退回进程目录时 `logger.warn` 告警。
 
-插件的做法是**协议**，不是硬性拦截：
 
-1. Lead 发现无法在无用户输入下推进 → `commander(action=say)` 说明卡点，并请求「暂时作结」。
-2. 指挥员回 `决定：需澄清` + 头部 `批准：goal pause`（插件直接执行 pause），并写清恢复条件。
-3. Lead 暂停 goal、用 `ask_user_question` 问用户、**本轮结束**。
-4. 用户回复后，Lead 再汇报；指挥员 `批准：goal resume` 恢复自动推进。
+## 为什么子agent"起来了却半天不说话"（实测账）
 
-对应约束：
+真机日志（`~/.dsh/sessions/<ws>/<id>/session.v4.jsonl.zstd`）解出来的时间线：
 
-- `ask_user_question` 的 guard 会拒绝「没先问指挥员就问用户」，并提示先请求「暂时作结」。
-- goal 提醒文本里写明了这条流程，每轮都会出现在 agent 上下文里。
-- 指挥员契约要求：无法推进时主动 `批准：goal pause`，不要保持 active 空转。
+| 时刻 | 事件 | 说明 |
+| --- | --- | --- |
+| 0.00s | `subagent/descriptor` + `agent/inbox/spliced`（整份预热提示词）+ `turn/start` | **上下文注入是毫秒级** |
+| 0.16s | `step/start` | 请求已发出 |
+| **57.64s** | 首条 `assistant/message` | `inputTokens: 269237`、`cacheReadTokens` **缺省** → 冷预填充 |
+| 57.66s | 4 个 `read` 结果（doc 四件套） | 文档其实都是空骨架 |
+| 82.16s | 首条 `text`（26 字） | 第二轮 24.4s，`cacheRead: 269184` |
 
-## goal 规则
+结论：慢的不是注入，是**子会话的第一次模型调用要冷预填充整份工具表**——这个 profile 同时挂了
+rea / blender / unity 三个 MCP（一百多个工具，描述都很长）加几十个 skill，全在系统前缀里。
+`isSeeded: false` 说明**没有继承父会话历史**，那 269k 全是"环境固定开销"。
 
-- 指挥员可以直接管理 goal：`commander(action="goal", goalAction="create|edit|pause|resume|blocked|complete|clear", objective?, maxRounds?)`。
-- 指挥员回复头部写 `批准：goal <动作>` 时，插件直接执行，不再交给主agent调 `update_goal`；`create/edit` 可附 `目标：…`、`轮次：N`。
-- goal `complete` 后可按下一阶段 `create` 新 goal，持续循环。
-- 用户 `paused` 也可以由指挥员显式 resume（插件侧），模型工具仍不能 resume。
-- 只有 `action=start` 在**没有 goal** 时自动创建一次协作提醒；不会覆盖用户已有 goal。
+三条对策（3.1.1）：
 
-## 安装与配置
+1. **provider 默认改 `fork`**：fork 复用父会话逐字节相同的前缀，命中 KV cache；失败自动退 `spawn`。
+2. **预热代价落盘**：实测数字写进 `state.json`，重启后 tooltip 仍给得出"秒/步/工具/token"。
+3. **tooltip 说清为什么慢**：读不到代价时也写明"首次要预填充整份工具表，通常 60–90 秒，之后走缓存"。
 
-用 `plugin_manager` 安装本目录；Agent Teams 需要已启用的 agent-team profile（本机默认已启用）。
+根治要减前缀（按 preset 裁剪工具面），这不在插件权限内——插件只能选 provider 和把代价讲明白。
 
-打包分发（换环境测试）：`npm pack` 产物为 `local-dsh-commander-<version>.tgz`；解压后得到 `package/`，重命名为 `dsh-commander-<version>` 即可作为目录安装。详见 `INSTALL.md`。
 
-`cordis.patch.yml` 的 `config` 可调：
 
-| 字段 | 默认 | 说明 |
-|---|---|---|
-| `commanderName` | `commander` | teammate 名字（同时是 `send_message` 的 target） |
-| `provider` | `spawn` | 创建 teammate 的 provider |
-| `advisorProvider` | `''` | 指导者模型 provider（Plugin Manager 可填） |
-| `advisorModel` | `''` | 指导者模型 id（Plugin Manager 可填；留空沿用 Agent Teams 路由） |
-| `advisorReasoningEffort` | `''` | 指导者 reasoning effort（可留空） |
-| `readOnlyTools` | read/read_image/glob/grep/web_search/web_fetch/write/edit/apply_patch | 允许的工具（write/edit 有权限但默认不建议动手） |
-| `extraReadOnlyTools` | `[]` | 追加允许的工具 |
-| `shellTools` | `pwsh,bash` | 只读 shell 工具名；自动过滤不可用项 |
-| `writeScope` | `doc` | 指挥员可写的相对目录；留空或 `*` 表示不限制 |
-| `enforceApproval` | `true` | 没有「允许结束」时拒绝 `update_goal(complete)` |
-| `resumeOnAbnormal` | `true` | 异常中断恢复时自动重新 arm active goal |
-| `goalMode` | `augment` | `off` 时完全不碰 goal |
-| `goalReminder` | 见源码 | 写入 goal 的协作提醒 |
-| `statePath` | `''` | 状态文件路径；留空用 `~/.dsh/commander/state.json` |
-| `expectTranscriptWindow` | `false` | 期望 UI 历史窗口已挂载；为 `true` 且未挂载时 `status` 报故障 |
-| `locale` | `zh-CN` | 用户可见文案语言：`zh-CN` / `en` |
-| `checkCommands` | `[]` | 受控检查白名单，`name = command` 或直接命令；`checks` 只执行这里列出的项 |
-| `checkTimeoutMs` | `180000` | 单条检查超时，超时整组进程被杀 |
-| `stateMaxBytes` | `262144` | 状态文件上限，超出备份后重置 |
-| `stateKeepPerTable` | `200` | `interruptions`/`rounds` 每表保留的会话数 |
+- 只读 shell 白名单是 **best-effort 启发式**，不是沙箱。
+- 指挥员异常崩溃靠看门狗发现（默认 20 分钟上限），不再有宿主的即时推送。
+- 子会话的服务端 `canControl` 在「会话未打开且非已知指挥员」时 fail-open；
+  第一道防线是客户端首帧判定。
+- 未实现「切到全接管立刻补一次交接」：要等下一次 `turn/end`。
+- 与老包**默认工具名冲突**（都是 `commander`），并存时请改 `toolName`。
 
-## 验证
-
-```sh
-node test/offline.mjs          # 工具/命令/门禁/doctor/checks
-node test/takeover.mjs         # 接管四态与门禁矩阵
-node test/handoff.mjs          # 全接管自动交接
-node test/regressions.mjs      # CODE_STATE、决议行、文案目录
-node test/state-store.mjs      # 权限、跨进程锁、损坏隔离、迁移、修剪
-node test/transcript-window.mjs
-node test/manual.mjs           # 说明书索引/正文/与 AGENT-MANUAL.md 一致
-node test/style.mjs            # 体量、空 catch、超长行、依赖方向（棘轮）
-node test/actions.mjs          # action 注册表单一事实源
-node test/guards.mjs           # 门禁判定真值表
-```
-
-十条都在 `checkCommands` 里，`/commander checks <name>` 可让指挥员自己复跑。
-
-`test/regressions.mjs` 覆盖：CODE_STATE 解析真实提交号、内容哈希（touch 不误判）、只排除根部 `doc/`、决定行允许后缀说明、`zh-CN`/`en` key 对齐与缺 key 显式报错。
-`test/state-store.mjs` 覆盖改进点 5 的五条验收：0600/0700、锁住不覆盖、坏文件备份、旧版本迁移、表修剪。
-
-覆盖：teammate 只创建一次、`list/say/round` 不新建卡片、消息投递、goal 只创建一次且 round/say 不改动、paused goal 保持暂停、非主会话拒绝、写文件/构建命令被 guard 拒绝、事件与命令注册。
-
-## 会话日志修复（2.9.42）
-
-如果 GUI 报某条会话 `is corrupt: SessionFormatError: <type> does not match an open turn and step`，**数据没有烂**——只是日志里混进了一条结构越界的事件（通常来自旧版本在 `turn/end` 之后写的通知）。
-
-先体检（只读，不改文件）：
-
-```sh
-node scripts/repair-session.mjs "%USERPROFILE%\.dsh\sessions\<工作区目录>\<会话>\session.v4.jsonl.zstd"
-```
-
-它会报出越界事件的位置；确认是要丢的那条后修复：
-
-```sh
-node scripts/repair-session.mjs <同上路径> --drop-seq=17547 --apply
-```
-
-修复会先备份 `.bak-<时间戳>`，然后丢弃该事件、其后 `seq` 整体前移、重放校验、**按原帧结构**重新压缩写回。
-
-> ⚠️ 关键坑：DSH 的会话日志是「每帧一次 append」的多帧 zstd 流。把多帧压成单帧后宿主读不回来（会话会从界面上消失）。这个脚本按原帧边界重建，别再手工 `zstd -d | zstd -c` 覆盖。
-
-升级插件后请**重启 DSH**：`/commander doctor` 的「运行中 / 磁盘」不一致，说明进程里还是旧代码——2026-11-13 那次会话被写坏，直接诱因就是旧进程在跑 2.9.20 的写入路径。
-
-## 已知限制
-
-- 只读 shell 是白名单守卫，不是安全沙箱。
-- 设计上不使用 `ask_user_question`：多数问题由指挥员依据用户原有需求自行决策；只有会改变用户需求/产品语义的事项才请 Lead 决策。
-- teammate 的工具面通过 `tools.restrict` + guard 收紧；第三方插件在 teammate 自己作用域注册的工具不受影响（DSH 设计使然）。
-- 旧的 `commander-<uuid>` 是子agent，不会自动变成 teammate；但可通过 `commander(action=say, target="<id>")` 续接。
-- pending、放行、中断记录与轮次写入 `~/.dsh/commander/state.json`（`statePath` 可改）；写盘失败时降级内存，`status` 会显示「内存模式」并给出错误原因。
-- `CODE_STATE` 必须写成单独一行：`适用状态：CS-…`（整行只有 token）；夹带说明文字会导致放行失败。
-- `turn/end` 缓存只接受 `event.time >= pending.sentAt` 的回复；旧请求迟到的回复不会当成新请求答案。
-- 快照 4000 文件 / 深度 8 上限，超出后状态不再变化。
-- `CODE_STATE` 只排除**工作区根部**的 `doc/`：`commander_record` 与计划板写入不会让放行失效，但 `src/doc/` 这类真实代码目录仍计入。
-
-- 轮次只统计有有效决策的回复；interrupt/失败不计入轮次。
-- 外部改代码会在 `update_goal complete` 前的异步校验中被拒绝，不需要先跑 `status`。
-- `doc/plan.md` / `doc/agent.md` 指挥员有写权限但默认不动手；需要自动留痕时可让它写，或由主agent维护。
-- 交接的 `handoffStates` 只按需创建，根会话结束后不主动回收（内存里每条几百字节，长期多会话会缓慢增长）。
-- 说明书是**英文单语**（2.9.37 起）：中文用户的 agent 也会读到英文说明书（省 token 优先）；契约令牌仍是中文，不受影响。
-- `/commander/takeover` 这条本地 HTTP 路由没有鉴权：只监听 loopback，任何本机进程都能改接管状态（默认接受，因为它等价于用户点图标）。
-- 探针 `probe="send"` 会真的把指挥员唤醒一次，它那句回复没有消费者（探针不注入回主agent）。
-
-## 许可证
-
-[MIT](LICENSE) © 2026 leleou209
-
-## 状态文件与隐私
-
-- 运行时数据只写在 `~/.dsh/commander/state.json`（pending 请求、放行记录、中断记录、轮次计数）与可选的 `transcript-window.log`（仅 `debug: true` 时写）；
-- 仓库里不含任何会话内容、密钥或本机绝对路径；
-- 指挥员的读写范围由配置 `writeScope`（默认 `doc/`）与只读工具白名单约束，**它不是安全沙箱**。
