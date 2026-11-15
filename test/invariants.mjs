@@ -123,6 +123,23 @@ check('门禁必须覆盖原生 goal 工具，不能只挡自家通道', () => {
   assert.ok(source.includes('mode: store.mode(rootId), commanderName'), '直连拦截要用显式挡位，不能用推导值（否则重启后误拦）')
 })
 
+check('关系声明与「督促用 team」各只出现一次，别又长回去', () => {
+  const prompt = read('lib/prompt.js')
+  // 声明进工具说明（每个请求都带，所以只许一行）
+  assert.ok(prompt.includes('RELATION_NOTE,'), '工具说明必须带上关系声明')
+  assert.ok(prompt.includes('指挥员不影响 agent team 的运行'), '声明原文要保留')
+  // 督促句进指挥员首轮提示词（一次性，不占每轮）
+  assert.ok(prompt.includes('可以适度督促主会话使用 agent team'), '指挥员提示词要有这句')
+  const noteLine = prompt.split('\n').find((line) => line.includes('export const RELATION_NOTE'))
+  assert.ok(noteLine !== undefined)
+  // 工具说明不许再膨胀：正文里一个 agent team 都不许写死，只能引用 RELATION_NOTE 那一行。
+  const descStart = prompt.indexOf('export const TOOL_DESCRIPTION')
+  const desc = prompt.slice(descStart, prompt.indexOf('].join', descStart))
+  assert.ok(desc.length > 100, '切片太短，断言会失真')
+  assert.equal((desc.match(/agent team/g) ?? []).length, 0, '工具说明正文不得再展开 agent team 论述')
+  assert.equal((desc.match(/RELATION_NOTE/g) ?? []).length, 1, '工具说明只引用一次声明')
+})
+
 check('index.js 只做装配：不含工具/路由/驱动的实现体', () => {
   const source = read('index.js')
   assert.ok(!source.includes('webServer.register({'), '路由实现应在 routes.js')
