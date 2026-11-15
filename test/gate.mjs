@@ -3,7 +3,7 @@
  * 门禁静默失效比崩溃更危险，所以这里穷举边界。
  */
 import assert from 'node:assert/strict'
-import { askUserDenial, ensureAbortSignal, goalGate, invalidatesApproval, readOnlyShellViolation, toolSurfaceDenial, writeScopeViolation } from '../lib/gate.js'
+import { askUserDenial, directMessageDenial, ensureAbortSignal, goalGate, invalidatesApproval, nativeGoalAction, readOnlyShellViolation, toolSurfaceDenial, writeScopeViolation } from '../lib/gate.js'
 
 const checks = []
 const check = (name, fn) => checks.push({ name, fn })
@@ -115,6 +115,35 @@ check('ensureAbortSignal：传入原样返回，缺省现造', () => {
   assert.equal(ensureAbortSignal(controller.signal), controller.signal)
   assert.ok(ensureAbortSignal(undefined) instanceof AbortSignal)
   assert.notEqual(ensureAbortSignal(undefined), ensureAbortSignal(undefined), '不共享，避免互相 abort')
+})
+
+check('nativeGoalAction：原生 goal 工具翻译成动作，别的工具返回 undefined', () => {
+  assert.equal(nativeGoalAction('create_goal', { objective: 'x' }), 'create')
+  assert.equal(nativeGoalAction('update_goal', { action: 'complete' }), 'complete')
+  assert.equal(nativeGoalAction('update_goal', { action: 'pause' }), 'pause')
+  assert.equal(nativeGoalAction('update_goal', { action: 'nonsense' }), undefined, '非法动作不认')
+  assert.equal(nativeGoalAction('update_goal', {}), undefined)
+  assert.equal(nativeGoalAction('get_goal', {}), undefined, '只读的不算')
+  assert.equal(nativeGoalAction('commander', { action: 'goal' }), undefined, '自家通道走 runGoal，不重复拦')
+})
+
+check('直接给指挥员发消息：只挡 off 挡位、且目标就是本会话指挥员', () => {
+  const base = { toolName: 'send_message', commanderName: 'cmdr', args: { agent: 'cmdr' } }
+  assert.ok(directMessageDenial({ ...base, mode: 'off' }), 'off 下必须拦：否则绕过 commander 工具把它叫起来')
+  assert.equal(directMessageDenial({ ...base, mode: 'observe' }), undefined)
+  assert.equal(directMessageDenial({ ...base, mode: 'full' }), undefined)
+  assert.equal(directMessageDenial({ ...base, mode: 'off', args: { agent: 'other' } }), undefined, '发别人不管')
+  assert.equal(directMessageDenial({ ...base, mode: 'off', toolName: 'list_agents' }), undefined)
+  assert.equal(directMessageDenial({ toolName: 'send_message', mode: 'off', commanderName: '', args: { agent: 'cmdr' } }), undefined, '没配名字就不猜')
+  assert.ok(directMessageDenial({ toolName: 'send_message', mode: 'off', commanderName: 'cmdr', args: { target: 'cmdr' } }), 'target 字段也要认')
+})
+
+check('问用户门禁覆盖宿主的两个工具名', () => {
+  for (const toolName of ['ask_user_question', 'request_user_input']) {
+    assert.ok(askUserDenial({ toolName, mode: 'full', consulted: false, message: 'M' }), `${toolName} 必须拦`)
+    assert.equal(askUserDenial({ toolName, mode: 'full', consulted: true, message: 'M' }), undefined)
+    assert.equal(askUserDenial({ toolName, mode: 'partial', consulted: false, message: 'M' }), undefined)
+  }
 })
 
 let failed = 0
