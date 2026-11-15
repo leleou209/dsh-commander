@@ -4,7 +4,7 @@
 
 在dsh中建立一位稳定处于指挥位的子agent，并以不同挡位下不同的身份参与你的项目并逐级代行指挥，实现项目的自动化推行
 
-当前版本：3.1.3 ｜ MIT ｜ [版本与依赖](#版本与依赖)
+当前版本：3.1.4 ｜ MIT ｜ [版本与依赖](#版本与依赖)
 
 主 agent 负责执行，指挥员负责方向与验收。双方分工协作，节奏合拍。
 
@@ -80,10 +80,10 @@
 | --- | --- |
 | 读 | 全部项目文件（`read` / `glob` / `grep`） |
 | 跑 | 只读 shell（`pwsh` / `bash`；写操作、重定向、未知命令一律拦下） |
-| 写 | **只限 `doc/`**（四份协作文档） |
+| 写 | 只有两个通道：`commander_record` → `doc/history.md`；`commander(action="plan")` → `doc/plan.md`。都是倒序追加，保留旧版 |
 | 联网 | `web_search` / `web_fetch` |
 | 对话 | `commander` / `commander_record` / `list_agents` / `send_message` |
-| 不做 | 改源码、装插件、动 profile、执行会改文件的命令 |
+| 不做 | 改源码、装插件、动 profile；也没有 `write`/`edit`，碰不到 `doc/` 以外的文件 |
 
 工具面是**白名单**（13 项），默认不动手；要它真的改点什么，是你在对话里明确要求。
 
@@ -95,6 +95,9 @@
 | `doc/history.md` | 已发生的实质行为（最新在上） |
 | `doc/plan.md` | 当前计划与历史轮次 |
 | `doc/agent.md` | 设计导向与编辑行为分化 |
+
+`plan.md` 由指挥员自己维护：目标足够清楚时，它用 `commander(action="plan")` 写一版计划，最新一条就是当前计划，旧版保留可回溯。
+全接管时每次交接都会提示它「计划有变就先更新 plan.md 再下指令」。
 
 它们支持模糊迭代与意图溯源，但也会增加上下文，**利弊兼存**：文档越厚，预热越贵，指挥员越容易读到过期结论。建议只写"会影响下一次判断"的东西。
 
@@ -180,16 +183,17 @@ test/               9 个测试文件，零依赖
 ```bash
 node test/modes.mjs         # 9   挡位真值表
 node test/gate.mjs          # 15  门禁：每道门该拦 2 条 + 不该拦 2 条
-node test/handoff.mjs       # 9   交接守卫 + 协议解析
+node test/handoff.mjs       # 10  交接守卫 + 协议解析
 node test/store.mjs         # 8   落盘 / 恢复 / 损坏隔离 / 磁盘失败降级
+node test/docs.mjs          # 4   doc/ 写入：骨架不覆盖、倒序追加不嵌套、plan 格式
 node test/preheat.mjs       # 6   预热代价 + goal 决策
 node test/goal-link.mjs     # 5   goal 联动
 node test/client-render.mjs # 10  React stub 真跑组件（hooks 顺序 / 首帧）
-node test/load.mjs          # 16  假宿主真跑 apply()：接线 / 路由 / init / 挡位 / 门禁 / cwd
+node test/load.mjs          # 18  假宿主真跑 apply()：接线 / 路由 / init / 挡位 / 门禁 / cwd / plan
 node test/invariants.mjs    # 15  架构不变量（防止简化被悄悄改回去）
 ```
 
-**93 项全绿**，`npm pack` 产物内重跑同样全绿（证明没有漏文件）。零外部依赖，只用 `node`。
+**100 项全绿**，`npm pack` 产物内重跑同样全绿（证明没有漏文件）。零外部依赖，只用 `node`。
 
 ## 已知限制
 
