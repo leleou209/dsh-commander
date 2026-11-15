@@ -28,7 +28,7 @@ import { registerRoutes } from './lib/routes.js'
 import { registerTools } from './lib/tools.js'
 import { sendConsult, waitReply } from './lib/consult.js'
 import { DEFAULT_MODE, LABELS, resolveMode, shouldSyncGoal } from './lib/modes.js'
-import { askUserDenial, ensureAbortSignal, goalGate, invalidatesApproval, readOnlyShellViolation, toolSurfaceDenial, writeScopeViolation } from './lib/gate.js'
+import { askUserDenial, directMessageDenial, ensureAbortSignal, goalGate, invalidatesApproval, nativeGoalAction, readOnlyShellViolation, toolSurfaceDenial, writeScopeViolation } from './lib/gate.js'
 import { findCommander, listMembers, restrictCommander, rootIdOf as rootIdOfHost, sendToCommander as sendHost, spawnCommander, subtreeBusy } from './lib/commander.js'
 
 export const name = 'dsh-commander'
@@ -305,8 +305,24 @@ export function apply(ctx, rawConfig = {}) {
         message: '全接管下问用户前必须先用 commander(action="say") 咨询指挥员。',
       })
       if (ask !== undefined) return ask
+
       const isCommander = commanderIds.has(agent.id)
-      if (!isCommander) return undefined
+      // 原生 goal 工具也要过同一道门：主 agent 手里有 create_goal / update_goal，
+      // 只挡 commander(action="goal") 那条自家通道等于没挡。
+      const goalAction = nativeGoalAction(exec.name, exec.arguments)
+      if (goalAction !== undefined) {
+        const denial = app.goalGateError(agent, goalAction)
+        if (denial !== undefined) return denial
+        // 放行是一次性的：过了就把「允许结束」收掉（guard 在调用前跑，只能在这里消费）。
+        if (goalAction === 'complete') released.delete(rootId)
+      }
+      if (!isCommander) {
+        // 这里传**显式**挡位而不是推导值：推导会在"重启后还没解析到指挥员"时得到 off，
+        // 于是把合法的直连也拦掉。只挡用户真的亲手切到 off 的情况。
+        return directMessageDenial({
+          toolName: exec.name, args: exec.arguments, mode: store.mode(rootId), commanderName: config.commanderName,
+        })
+      }
       const cwd = agent.session?.cwd ?? process.cwd()
       return toolSurfaceDenial({
         toolName: exec.name, isCommander, allowed: new Set(config.allow),
