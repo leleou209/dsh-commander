@@ -75,6 +75,44 @@ check('planGoalSync 弱参与：有 active goal 才暂停；有 origin 则先还
   assert.equal(restore.objective, '原文')
 })
 
+check('重启后退出接管：没有 origin 也要把「接管」那句剥掉（否则一直念念不忘）', () => {
+  const covered = {
+    objective: buildTakeoverObjective({ mode: 'partial', original: '把登录页重做完' }),
+    phase: 'active', revision: 3, id: 'g',
+  }
+  // origins 只在进程内存里，重启后是空的 —— 这正是"退出接管还去找指挥员"的机制。
+  const plan = planGoalSync({ mode: 'observe', goal: covered })
+  assert.equal(plan.action, 'restore-and-pause', '必须还原，不能只 pause 把覆写文本留着')
+  assert.equal(plan.objective, '把登录页重做完')
+  assert.equal(plan.objective.includes('指挥员负责方向'), false, '还原后不得残留指挥员口径')
+
+  // 原本就没有 objective 的会话：占位符不还回去，只 pause。
+  const placeholderGoal = {
+    objective: buildTakeoverObjective({ mode: 'partial', original: '' }),
+    phase: 'active', revision: 1, id: 'g2',
+  }
+  assert.equal(planGoalSync({ mode: 'observe', goal: placeholderGoal }).action, 'pause')
+
+  // 没被覆写过的普通 goal 也不该被动 objective。
+  assert.equal(planGoalSync({ mode: 'observe', goal: { objective: '普通目标', phase: 'active', revision: 1 } }).action, 'pause')
+
+  // 已经 paused 的 goal 同样要收拾：暂停不等于免于还原（本会话 goal 就是这个状态）。
+  const pausedCovered = { ...covered, phase: 'paused' }
+  const pausedPlan = planGoalSync({ mode: 'observe', goal: pausedCovered })
+  assert.equal(pausedPlan.action, 'restore', 'paused 也要还原 objective')
+  assert.equal(pausedPlan.objective, '把登录页重做完')
+  // 已完成的 goal 不碰：宿主会拒绝 edit。
+  assert.equal(planGoalSync({ mode: 'observe', goal: { ...covered, phase: 'complete' } }).action, 'none')
+})
+
+check('接管模板要求主agent 用 team 并行，而不是把活交回指挥员', () => {
+  for (const mode of ['partial', 'full']) {
+    const text = buildTakeoverObjective({ mode, original: 'x' })
+    assert.ok(text.includes('agent team'), `${mode} 模板必须点名 agent team`)
+    assert.ok(text.includes('subagent'), `${mode} 模板必须点名 subagent`)
+  }
+})
+
 let failed = 0
 for (const { name, fn } of checks) {
   try {
