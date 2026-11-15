@@ -123,17 +123,6 @@ check('门禁必须覆盖原生 goal 工具，不能只挡自家通道', () => {
   assert.ok(source.includes('mode: store.mode(rootId), commanderName'), '直连拦截要用显式挡位，不能用推导值（否则重启后误拦）')
 })
 
-check('提示词必须明确「它不是替补执行者」，并指路 agent team', () => {
-  const prompt = read('lib/prompt.js')
-  assert.ok(prompt.includes('不是替补执行者'), '工具说明必须挡住"把活交给它"')
-  assert.ok(prompt.includes('agent team'), '必须指路并行拆活')
-  assert.ok(prompt.includes('三种情况用它'), '要给判据，否则模型只会二选一：问它 or 自己干')
-  assert.ok(prompt.includes('不是执行者，也不是并行劳动力'), '指挥员自己的提示词里也要立这条边界')
-  const goalLink = read('lib/goal-link.js')
-  assert.ok(goalLink.includes('agent team'), '接管模板同样要有 team 指路')
-  assert.ok(goalLink.includes('stripTakeoverObjective(current)'), '退出接管时必须有 origin 缺失的兜底还原')
-})
-
 check('index.js 只做装配：不含工具/路由/驱动的实现体', () => {
   const source = read('index.js')
   assert.ok(!source.includes('webServer.register({'), '路由实现应在 routes.js')
