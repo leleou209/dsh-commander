@@ -417,6 +417,44 @@ check('工具 execute：status 返回可读文本，且不需要指挥员存在'
   assert.ok(out.text.includes('未建立'))
 })
 
+check('原生 update_goal 也走 goal 门禁：partial 下不能自己宣布完成', async () => {
+  const host = makeHost()
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'cmdr-core-native-goal-'))
+  host.state.descendants = [{ kind: 'child', id: 'cmdr-1', name: 'commander', label: 'x', depth: 1 }]
+  apply(host.ctx, { statePath: path.join(dir, 'state.json'), allow: ['read'] })
+  await flush()
+  const guard = host.guards[0]
+  const me = () => host.ctx.get('agents').get('root-1')
+  const call_ = (name, args) => guard({ agent: me(), name, arguments: args })
+
+  // observe：门禁不生效，主agent 自由
+  assert.equal(call_('update_goal', { action: 'complete' }), undefined, 'observe 下不该拦')
+
+  await call(host, { method: 'POST', body: { sessionId: 'root-1', mode: 'partial' } })
+  assert.ok(call_('update_goal', { action: 'complete' }), 'partial 下 complete 必须拦——否则绕开指挥员自己宣布完成')
+  assert.ok(call_('update_goal', { action: 'pause' }), 'pause 要批准')
+  assert.ok(call_('update_goal', { action: 'edit' }), 'edit 要批准')
+  assert.equal(call_('update_goal', { action: 'resume' }) !== undefined, true, 'resume 永远交用户')
+  assert.equal(call_('get_goal', {}), undefined, '只读的不该拦')
+  assert.equal(call_('create_goal', { objective: 'x' }), undefined, 'create 与自家通道口径一致，不受门禁')
+})
+
+check('off 挡位：直接给指挥员发 send_message 也会被拦（不能绕过 commander 工具）', async () => {
+  const host = makeHost()
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'cmdr-core-off-ping-'))
+  host.state.descendants = [{ kind: 'child', id: 'cmdr-1', name: 'commander', label: 'x', depth: 1 }]
+  apply(host.ctx, { statePath: path.join(dir, 'state.json'), allow: ['read'] })
+  await flush()
+  const guard = host.guards[0]
+  const me = () => host.ctx.get('agents').get('root-1')
+  const ping = (target) => guard({ agent: me(), name: 'send_message', arguments: { agent: target } })
+
+  assert.equal(ping('commander'), undefined, 'observe 下可以直连')
+  await call(host, { method: 'POST', body: { sessionId: 'root-1', mode: 'off' } })
+  assert.ok(ping('commander'), 'off 下直连指挥员必须拦：否则 commander 工具的 say/wait 禁令形同虚设')
+  assert.equal(ping('someone-else'), undefined, '发给别人不管')
+})
+
 check('清理：apply 注册的 disposer 全部可调用（不会在卸载时抛）', async () => {
   const host = makeHost()
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'cmdr-core-dispose-'))
