@@ -1,12 +1,47 @@
 # 决策托管（dsh-commander）
 
+[![npm](https://img.shields.io/npm/v/@leleou209/dsh-commander.svg)](https://www.npmjs.com/package/@leleou209/dsh-commander)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](#license)
+[![DSH](https://img.shields.io/badge/DSH-%E2%89%A5%200.2.2-4B32C3)](#版本与依赖)
+
 > **决策托管**：把「下一步做什么、做到什么算完成」的判断权，按你选的挡位托付给一个长期在线、可续接的指挥实体。即指挥员。
 
-在dsh中建立一位稳定处于指挥位的子agent，并以不同挡位下不同的身份参与你的项目并逐级代行指挥，实现项目的自动化推行
+在 DSH 中建立一位稳定处于指挥位的子 agent，并以不同挡位下不同的身份参与你的项目、逐级代行指挥，实现项目的自动化推行。
 
-当前版本：3.1.6 ｜ MIT ｜ [版本与依赖](#版本与依赖)
+| | |
+| --- | --- |
+| **包名** | `@leleou209/dsh-commander` |
+| **版本** | 3.1.6 |
+| **npm** | <https://www.npmjs.com/package/@leleou209/dsh-commander> |
+| **许可证** | MIT |
+| **DSH** | ≥ 0.2.2 |
 
 主 agent 负责执行，指挥员负责方向与验收。双方分工协作，节奏合拍。
+
+### 安装
+
+```bash
+# 一条命令，装完重启 DSH 即可
+dsh plugin --profile desktop add @leleou209/dsh-commander
+```
+
+也可以在**插件市场**里装：
+
+1. DSH 左侧栏 → **插件 → 发现** → **添加索引源**
+2. 粘贴：`https://aaamechanic.github.io/dsh-plugin-market/index.json`
+3. 搜 `commander`，点安装
+
+或直接 `npm install @leleou209/dsh-commander` 后手动加进 profile 的 `dsh.profile.bundles`
+（包里声明了 `dsh.bundle`，装进 profile 后会被自动识别并启用）。
+
+```bash
+# 升级
+dsh plugin --profile desktop add @leleou209/dsh-commander@latest
+# 卸载
+dsh plugin --profile desktop remove @leleou209/dsh-commander
+```
+
+装好后：composer 右侧出现图标即就绪；客户端半改动**刷新页面**，Host 半改版本需**重启**。
 
 ---
 
@@ -101,10 +136,11 @@
 
 它们支持模糊迭代与意图溯源，但也会增加上下文，**利弊兼存**：文档越厚，预热越贵，指挥员越容易读到过期结论。建议只写"会影响下一次判断"的东西。
 
-## 安装
+## 手动配置（一般用不到）
+
+包内自带 `cordis.patch.yml`，装进 profile 后自动生效。需要改默认值时，在你的 profile patch 里加同名条目覆盖：
 
 ```yaml
-# profile 的 cordis.patch.yml（包内自带一份同样内容）
 - insert:
     - id: commander
       name: '@leleou209/dsh-commander'
@@ -114,8 +150,6 @@
         docDir: doc
         enforceApproval: true
 ```
-
-客户端半（图标）改动 → **刷新一次页面**；Host 半改版本 → **重启**。
 
 ## 配置项
 
