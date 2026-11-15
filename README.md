@@ -4,7 +4,7 @@
 
 在dsh中建立一位稳定处于指挥位的子agent，并以不同挡位下不同的身份参与你的项目并逐级代行指挥，实现项目的自动化推行
 
-当前版本：3.1.1 ｜ MIT ｜ [版本与依赖](#版本与依赖)
+当前版本：3.1.2 ｜ MIT ｜ [版本与依赖](#版本与依赖)
 
 主 agent 负责执行，指挥员负责方向与验收。双方分工协作，节奏合拍。
 
@@ -68,6 +68,8 @@
 | **该不该问你** | 一遇模糊就停下来弹确认 | `full` 下问用户也收归指挥员，由它决定是否打扰你 |
 
 `paused` 的 goal 只能由你在界面恢复——模型无权 `resume`。
+
+这三道门卡在**工具层**，对宿主原生的 `create_goal` / `update_goal` 同样生效，不只管 `commander(action="goal")` 那条自家通道——否则主 agent 直接调原生工具就能绕开指挥员。`off` 挡位连"直连指挥员"也拦：`send_message` 发给指挥员同样会被拒绝，避免绕过 `say`/`wait` 的禁令。
 
 ## 权限边界
 
@@ -181,24 +183,25 @@ test/               9 个测试文件，零依赖
 
 ```bash
 node test/modes.mjs         # 9   挡位真值表
-node test/gate.mjs          # 12  门禁：每道门该拦 2 条 + 不该拦 2 条
+node test/gate.mjs          # 15  门禁：每道门该拦 2 条 + 不该拦 2 条
 node test/handoff.mjs       # 9   交接守卫 + 协议解析
 node test/store.mjs         # 8   落盘 / 恢复 / 损坏隔离 / 磁盘失败降级
 node test/preheat.mjs       # 6   预热代价 + goal 决策
 node test/goal-link.mjs     # 5   goal 联动
 node test/client-render.mjs # 10  React stub 真跑组件（hooks 顺序 / 首帧）
-node test/load.mjs          # 13  假宿主真跑 apply()：接线 / 路由 / init / 挡位 / 门禁 / cwd
-node test/invariants.mjs    # 13  架构不变量（防止简化被悄悄改回去）
+node test/load.mjs          # 15  假宿主真跑 apply()：接线 / 路由 / init / 挡位 / 门禁 / cwd
+node test/invariants.mjs    # 14  架构不变量（防止简化被悄悄改回去）
 ```
 
-**85 项全绿**，`npm pack` 产物内重跑同样全绿（证明没有漏文件）。零外部依赖，只用 `node`。
+**91 项全绿**，`npm pack` 产物内重跑同样全绿（证明没有漏文件）。零外部依赖，只用 `node`。
 
 ## 已知限制
 
 - 只读 shell 是 **best-effort 启发式**（命令白名单 + 重定向检查），不是沙箱。
 - 指挥员异常崩溃靠看门狗发现（默认 20 分钟上限），没有宿主的即时推送。
 - 未实现"切到全接管立刻补一次交接"：要等下一次 `turn end`。
-- 子会话的服务端 `canControl` 在"会话未打开且非已知指挥员"时 fail-open，第一道防线是客户端首帧判定。
+- 子会话的服务端 canControl 在"会话未打开且非已知指挥员"时 fail-open，第一道防线是客户端首帧判定。
+- 门禁判断用内存里的指挥员 id 集合，**重启后到第一次解析到指挥员之前**是 fail-open（不拦）；这是刻意选的失败方向——漏拦一次比误拦一整天安全。
 
 ## License
 
