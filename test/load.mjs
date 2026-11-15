@@ -467,6 +467,45 @@ check('start 建立关系时把声明说一次（不额外占每轮提示词）'
   assert.ok(out.text.includes('预热'), '原来的建立说明不能被顶掉')
 })
 
+check('plan 动作：把计划写进 doc/plan.md，且不越界', async () => {
+  const host = makeHost()
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'cmdr-core-plan-'))
+  const cwd = path.join(dir, 'proj')
+  await fsp.mkdir(cwd, { recursive: true })
+  apply(host.ctx, { statePath: path.join(dir, 'state.json') })
+  await flush()
+  const tool = host.tools.find((entry) => entry.name === 'commander')
+  const agent = { ...rootAgent(), session: { header: { id: 'root-1' }, cwd, seq: 0 } }
+  const out = await tool.execute(
+    { action: 'plan', plan: '- 阶段一：拆分模块\n- 阶段二：补测试', planTitle: '重构' },
+    { agent, signal: new AbortController().signal },
+  )
+  assert.ok(out.text.includes('doc/plan.md'), '要回报真实写到的路径')
+  const text = await fsp.readFile(path.join(cwd, 'doc', 'plan.md'), 'utf8')
+  assert.ok(text.startsWith('# plan'), '要用 plan 的骨架')
+  assert.ok(text.includes('· 重构'), '标题要进去')
+  assert.ok(text.includes('阶段二：补测试'), '正文要进去')
+  // 空正文不该写盘
+  const empty = await tool.execute({ action: 'plan', plan: '   ' }, { agent, signal: new AbortController().signal })
+  assert.ok(empty.text.includes('需要 plan'), '空正文要拒绝')
+})
+
+check('plan 动作：不依赖挡位，没有指挥员也能记计划', async () => {
+  const host = makeHost()
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'cmdr-core-plan-off-'))
+  apply(host.ctx, { statePath: path.join(dir, 'state.json'), allow: ['read'] })
+  await flush()
+  // 无指挥员 → 推导挡位是 off；plan 仍应可用（挡位管对话，不管写文档）
+  const tool = host.tools.find((entry) => entry.name === 'commander')
+  const cwd = path.join(dir, 'proj')
+  await fsp.mkdir(cwd, { recursive: true })
+  const agent = { ...rootAgent(), session: { header: { id: 'root-1' }, cwd, seq: 0 } }
+  const out = await tool.execute({ action: 'plan', plan: '- x' }, { agent, signal: new AbortController().signal })
+  assert.ok(!out.text.includes('不运行指挥职责'), 'off 不该挡 plan')
+  assert.ok(out.text.includes('doc/plan.md'))
+  assert.ok(await fsp.stat(path.join(cwd, 'doc', 'plan.md')).then(() => true).catch(() => false))
+})
+
 check('清理：apply 注册的 disposer 全部可调用（不会在卸载时抛）', async () => {
   const host = makeHost()
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'cmdr-core-dispose-'))
