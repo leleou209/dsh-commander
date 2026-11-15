@@ -1,7 +1,6 @@
 {
-  "name": "@local/dsh-commander",
+  "name": "@lele/dsh-commander",
   "version": "3.1.4",
-  "private": true,
   "type": "module",
   "description": "决策托管（dsh-commander）3.1.1 提纯版：建立并绑定一个常驻可续接的指挥员子agent，预热后待命；按接管挡位管住 goal 与问用户；全接管时自动交接。",
   "license": "MIT",
@@ -52,5 +51,25 @@
     "bundle": {
       "patch": "./cordis.patch.yml"
     }
+  },
+  "author": "leleou209",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "commander",
+    "agent-teams",
+    "goal",
+    "orchestration",
+    "decision-delegation",
+    "human-in-the-loop"
+  ],
+  "homepage": "https://github.com/leleou209/dsh-commander#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/leleou209/dsh-commander.git"
+  },
+  "bugs": {
+    "url": "https://github.com/leleou209/dsh-commander/issues"
   }
 }
