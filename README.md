@@ -107,7 +107,7 @@
 # profile 的 cordis.patch.yml（包内自带一份同样内容）
 - insert:
     - id: commander
-      name: '@local/dsh-commander'
+      name: '@lele/dsh-commander'
       config:
         provider: fork          # fork 复用父会话前缀以命中 KV cache；不可用时自动退 spawn
         commanderName: commander
