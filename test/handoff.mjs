@@ -2,7 +2,7 @@
  * 交接判定 + 协议解析。每条守卫都对应一个真实踩过的坑，这里逐条钉住。
  */
 import assert from 'node:assert/strict'
-import { afterWait, classifyReply, commanderDead, renderInstruction, renderReport, shouldHandoff, shouldWakeParent } from '../lib/handoff.js'
+import { afterWait, classifyReply, commanderDead, renderInstruction, renderReport, shouldDriveOnTakeover, shouldHandoff, shouldWakeParent } from '../lib/handoff.js'
 import { hasRelease, parseDecision, parseGoalApprovals, parseRequestId } from '../lib/protocol.js'
 
 const checks = []
@@ -59,6 +59,26 @@ check('commanderDead：不存在或 failed 都算死', () => {
   assert.equal(commanderDead(null), true)
   assert.equal(commanderDead({ status: 'failed' }), true)
   assert.equal(commanderDead({ status: 'inactive' }), false)
+})
+
+check('协议：决定/批准/放行只认头块，正文引用不算', () => {
+  // 头块 = 开头到第一个空行。正文里引用一句「决定：允许结束」是说明，不是命令。
+  assert.equal(parseDecision('说明两句\n决定：继续'), 'continue', '头块内的决议行仍然认')
+  assert.equal(parseDecision('先说明。\n\n决定：允许结束'), undefined, '空行之后的决议行不算')
+  assert.equal(classifyReply('说明：\n\n决定：允许结束'), 'continue', '正文里的允许结束不得终止交接')
+  assert.equal(hasRelease('决定：继续\n\n备注：只有用户能说允许结束'), false, '正文提到不等于放行')
+  assert.equal(parseGoalApprovals('背景说明\n\n批准：goal edit').size, 0, '正文里的批准不算')
+  assert.equal(parseGoalApprovals('批准：goal edit\n决定：继续').has('edit'), true)
+})
+
+check('shouldDriveOnTakeover：只有「切 full + 原本就有 active goal」才补驱动', () => {
+  assert.equal(shouldDriveOnTakeover({ before: 'observe', next: 'full', goalPhase: 'active' }), true)
+  assert.equal(shouldDriveOnTakeover({ before: 'partial', next: 'full', goalPhase: 'active' }), true)
+  assert.equal(shouldDriveOnTakeover({ before: 'observe', next: 'full', goalPhase: undefined }), false, '没有 goal 只建不驱动')
+  assert.equal(shouldDriveOnTakeover({ before: 'observe', next: 'full', goalPhase: 'paused' }), false, 'paused 只覆写，不代用户 resume')
+  assert.equal(shouldDriveOnTakeover({ before: 'full', next: 'full', goalPhase: 'active' }), false, '已在 full 不重复驱动')
+  assert.equal(shouldDriveOnTakeover({ before: 'full', next: 'partial', goalPhase: 'active' }), false)
+  assert.equal(shouldDriveOnTakeover({ before: 'observe', next: 'partial', goalPhase: 'active' }), false, 'partial 不驱动')
 })
 
 check('协议：请求号 / 决议（允许行尾说明）/ 批准 / 放行', () => {

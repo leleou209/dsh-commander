@@ -1,6 +1,6 @@
 {
   "name": "@leleou209/dsh-commander",
-  "version": "3.1.6",
+  "version": "4.0.0",
   "type": "module",
   "description": "给 DSH 会话配一位常驻指挥员：托管「算不算完成、能不能改目标、该不该问用户」三个判断点，全接管时按轮次驱动下一轮。A resident commander agent for DSH sessions that gates goal completion, goal edits and user questions.",
   "license": "MIT",
@@ -10,9 +10,9 @@
     "./icon": "./icon.svg"
   },
   "files": [
+    "index.js",
     "cordis.patch.yml",
     "icon.svg",
-    "index.js",
     "lib/client.js",
     "lib/commander.js",
     "lib/consult.js",
@@ -21,16 +21,19 @@
     "lib/gate.js",
     "lib/goal-link.js",
     "lib/handoff.js",
+    "lib/llm.js",
     "lib/modes.js",
     "lib/preheat.js",
     "lib/prompt.js",
     "lib/protocol.js",
+    "lib/route-ops.js",
     "lib/routes.js",
+    "lib/session.js",
     "lib/store.js",
     "lib/tools.js",
-    "README.md",
     "test/client-render.mjs",
     "test/docs.mjs",
+    "test/driver.mjs",
     "test/gate.mjs",
     "test/goal-link.mjs",
     "test/handoff.mjs",
@@ -38,7 +41,8 @@
     "test/load.mjs",
     "test/modes.mjs",
     "test/preheat.mjs",
-    "test/store.mjs"
+    "test/store.mjs",
+    "README.md"
   ],
   "dsh": {
     "client": {

@@ -11,7 +11,7 @@
 | | |
 | --- | --- |
 | **包名** | `@leleou209/dsh-commander` |
-| **版本** | 3.1.6 |
+| **版本** | 4.0.0 |
 | **npm** | <https://www.npmjs.com/package/@leleou209/dsh-commander> |
 | **许可证** | MIT |
 | **DSH** | ≥ 0.2.2 |
@@ -60,15 +60,98 @@ dsh plugin --profile desktop remove @leleou209/dsh-commander
 
 ## 模型怎么选（最重要的一条）
 
-- **不要用同类 / 同源模型当指挥员。** dsh默认选择同模型作为subagent，结果是两个同水平模型相互无法突破反而相互攒合，浪费时间和token。
+- **不要用同类 / 同源模型当指挥员。** dsh 默认给子 agent 用同一个模型，结果是两个同水平模型互相无法突破，反而相互攒合，浪费时间和 token。
 - 至少满足其一：**比主 agent 强一个量级**；或**来自不同厂商 / 不同训练路线**，让它拿到的视野与主 agent 不同、甚至更全。
 - 尽可能用**擅长架构设计**的模型当指挥，这会减少迭代次数与跨步，并兼容工作模型的能力，变相减少 token 消耗与 `history.md` 的堆积。
+
+### 模型是建立时的一次性决策
+
+**指挥员的模型在建立之前选定，建立之后不可更改。**
+
+这不是偷懒。宿主的子会话里，模型写在 `subagent/descriptor` 上，而那份日志只能追加、
+读取时只认第一条 descriptor——**"给已有子会话换模型"在宿主里没有合法表示**。
+插件早先试过一条侧路（往会话里追加 `model/selection`），当场看着能用，
+累积几次之后那个子会话就再也加载不起来了，表现为 `subagent/not-resumable`，
+**此后无论用什么方式都无法再和这个指挥员说话**。所以现在不提供"换"。
+
+### 怎么配
+
+两个地方可以定模型，按优先级：
+
+1. **建立时在界面里选**（推荐）：点皇冠徽章 → 还没有指挥员时直接出「选模型并建立」，
+   列出当前**全部已注册**的 provider / model（按 provider 分组；实测 7 个 provider、69 个模型），
+   选中即带着这个模型建立。每个会话各记各的，互不影响。
+2. **写在 profile 里当默认值**（不给选择时的兜底）：
+
+```yaml
+- insert:
+    - id: commander
+      name: '@leleou209/dsh-commander'
+      config:
+        llmProvider: anthropic        # 留空 = 跟主会话同一个 provider
+        llmModel: claude-opus-4       # 留空 = 跟主会话同一个模型
+        llmReasoningEffort: high      # 可选
+```
+
+三个键**互相独立**，只配 `llmModel` 也可以（provider 继续继承）。
+
+建立前会校验这条路由真的可用；不可用就在建立前拒绝，
+**不会造出一个"出生即坏"的指挥员**。
+
+**代价**：一旦定了模型，就**只能用 `spawn` 后端**。因为 fork 后端为保住 KV cache 复用
+会主动丢弃模型选择参数（宿主源码注释：`Fork omits model-selection arguments for KV cache reuse`），
+传了也静默无效——那比报错危险，所以插件直接不给 fork。代价是首次请求要冷预填充一次
+（实测约 57 秒 / 269k token），之后走缓存。
+
+### 选错模型了怎么办：重建
+
+```
+commander(action="dispose")   → 销毁本会话的指挥员
+commander(action="start")     → 按当前配置重新建立
+```
+
+或者一步到位：
+
+```
+commander(action="recreate", provider="qwen", model="qwen4-max-preview")
+```
+
+（`rebuild` 是它的别名，两者完全等价。）
+
+**重建 = 上下文重置。** 新指挥员是全新的；旧会话仍在磁盘上，但不再续接。
+这是刻意选的取舍：在本机上实测过，"保留上下文 + 换模型"会把子会话写坏，
+最终连话都说不上——重置至少永远能用。
+
+界面里也会如实说「指挥员已重建（上下文重置）」，不会假装是"换了模型还接着聊"。
+
+**三个实现细节，都是实测踩出来的：**
+
+- 宿主的子 agent **名字在父会话里唯一，dispose 不释放**（旧会话还在磁盘上），
+  所以重建会自动用 `commander-2` / `commander-3`…，认领时按 `commander` 前缀匹配。
+- `dispose` 之后也要把它记进"遗忘"名单，否则 catalog 里的持久投影会让它被重新认领。
+- 指挥员预热完进入 idle 后 **residency 会释放**，那时读不到它的会话事件，
+  所以「指挥员路由」显示的是插件在建立时记下的值。
+
+```status``` 里那行「指挥员路由」，就是它建立时选定的模型。
+
+**两种结局，都会如实告诉你是哪一种**：
+
+- **销毁**：本次进程内创建的指挥员有激活句柄，dispose() 真的把它拆掉。
+- **遗忘**：插件启动时从子会话目录"认领"到的（重启前创建的）**没有句柄**——
+  宿主的 Agent 只有 cancel()、subagents 服务也没有删除方法，唯一能拆的是
+  startActivation 返回的 dispose()，而那个已经在重启时丢掉了。
+  更麻烦的是 subagentCatalog 是父会话日志里的持久投影：**归档或删除子会话都不会让
+  那条记录消失**。所以这种情况改为在插件层"遗忘"——把这个 id 写进黑名单，从此不再认领，
+  下次 start 会新建一个。**旧会话数据仍留在磁盘上，没有删。**
+
+还有一种情况会自动处理：**指向的指挥员会话已经读不动时**，`say` 会把这个 id 记进遗忘名单
+并改投下一个候选，而不是认死第一条——否则一条坏记录会让这个会话永远发不出消息。
 
 ## 指挥员参与的四个挡位
 
 挡位决定着代管的程度：
 
-| 挡位 | 谁做决定 | 具体成效 |
+| 挡位 | 谁做决定 | 适合场景 |
 | --- | --- | --- |
 | `off` | 只你。指挥员休息，所有门禁失效 | 指挥员此时会拒绝向主会话提供帮助 |
 | `observe` | 你和主 agent 拍板，指挥员只给意见（**建立后的默认值**） | 类似顾问式处理，类比trae的专家模型模式 |
@@ -159,7 +242,9 @@ dsh plugin --profile desktop remove @leleou209/dsh-commander
 | --- | --- | --- |
 | `toolName` / `recordToolName` | `commander` / `commander_record` | 暴露给模型的工具名 |
 | `commanderName` | `commander` | 指挥员在 Agent Teams 里的名字（也用于查重） |
-| `provider` | `fork` | 子会话建立方式；失败自动退 `spawn` |
+| `provider` | `fork` | 子会话建立方式；失败自动退 `spawn`。**配了 `llm*` 时强制用 `spawn`** |
+| `llmProvider` / `llmModel` / `llmReasoningEffort` | 空（继承主会话） | 指挥员**自己的** LLM 路由；留空就跟主会话同模型 |
+| `grantAllModels` | `false` | 把当前全部已注册 provider/model 写成指挥员的 policy。**宿主的 UI 不让 addressed 子会话切模型，开了也没用**；插件自己的「指挥员模型」选择器不依赖它 |
 | `routePath` | `/commander/takeover` | 图标读写挡位的 HTTP 路由 |
 | `statePath` | `~/.dsh/commander/state.json` | 挡位与预热代价的落盘位置 |
 | `docDir` | `doc` | 四份协作文档所在目录 |
@@ -217,17 +302,18 @@ test/               9 个测试文件，零依赖
 ```bash
 node test/modes.mjs         # 9   挡位真值表
 node test/gate.mjs          # 15  门禁：每道门该拦 2 条 + 不该拦 2 条
-node test/handoff.mjs       # 10  交接守卫 + 协议解析
-node test/store.mjs         # 8   落盘 / 恢复 / 损坏隔离 / 磁盘失败降级
-node test/docs.mjs          # 4   doc/ 写入：骨架不覆盖、倒序追加不嵌套、plan 格式
+node test/handoff.mjs       # 12  交接守卫 + 协议解析（只认头块）
+node test/store.mjs         # 10  落盘 / 恢复 / 损坏隔离 / 磁盘失败降级
+node test/docs.mjs          # 7   doc/ 写入：骨架不覆盖、倒序追加不嵌套、plan 格式
+node test/driver.mjs        # 4   交接驱动：进场补驱动 / 退场收口 / 守卫不复位
 node test/preheat.mjs       # 6   预热代价 + goal 决策
-node test/goal-link.mjs     # 5   goal 联动
-node test/client-render.mjs # 10  React stub 真跑组件（hooks 顺序 / 首帧）
-node test/load.mjs          # 18  假宿主真跑 apply()：接线 / 路由 / init / 挡位 / 门禁 / cwd / plan
-node test/invariants.mjs    # 15  架构不变量（防止简化被悄悄改回去）
+node test/goal-link.mjs     # 6   goal 联动执行层（ref 形状按宿主 GoalRef 硬校验）
+node test/client-render.mjs # 21  React stub 真跑组件（hooks 顺序 / 首帧）
+node test/load.mjs          # 53  假宿主真跑 apply()：接线 / 路由 / init / 挡位 / 门禁 / cwd / plan
+node test/invariants.mjs    # 27  架构不变量（防止简化被悄悄改回去）
 ```
 
-**100 项全绿**，`npm pack` 产物内重跑同样全绿（证明没有漏文件）。零外部依赖，只用 `node`。
+**170 项全绿**，`npm pack` 产物内重跑同样全绿（证明没有漏文件）。零外部依赖，只用 `node`。
 
 ## 已知限制
 
@@ -240,3 +326,6 @@ node test/invariants.mjs    # 15  架构不变量（防止简化被悄悄改回�
 ## License
 
 MIT
+
+
+

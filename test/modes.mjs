@@ -47,12 +47,16 @@ check('shouldSyncGoal：weak→weak 零操作（这是误暂停 goal 的根因�
   assert.equal(shouldSyncGoal(undefined, 'observe'), false)
 })
 
-check('shouldSyncGoal：强→强不重复覆盖，强↔弱必须动', () => {
+check('shouldSyncGoal：同挡位零操作，强↔弱必须动，partial↔full 也要重写标题', () => {
   assert.equal(shouldSyncGoal('full', 'full'), false)
-  assert.equal(shouldSyncGoal('partial', 'full'), false)
+  assert.equal(shouldSyncGoal('partial', 'partial'), false)
   assert.equal(shouldSyncGoal('observe', 'full'), true)
   assert.equal(shouldSyncGoal('partial', 'observe'), true)
   assert.equal(shouldSyncGoal(undefined, 'partial'), true)
+  // 同为强参与但挡位不同：goal 标题/权限条款是按挡位写死的，必须重写。
+  // 不同步的实测现象：挡位切到 partial，goal 仍写「全接管：可代用户拍板」。
+  assert.equal(shouldSyncGoal('partial', 'full'), true)
+  assert.equal(shouldSyncGoal('full', 'partial'), true)
 })
 
 check('门禁开关：只有 full 拦问用户，partial/full 管 goal', () => {

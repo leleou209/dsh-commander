@@ -63,6 +63,40 @@ check('pending：写读删，删不存在的返回 false', async () => {
   assert.equal(JSON.parse(await fsp.readFile(file, 'utf8')).pending.r, undefined)
 })
 
+check('pending 清理：发起进程已退出的条目在加载时丢掉，本进程的保留', async () => {
+  const file = await tempFile()
+  await fsp.writeFile(file, JSON.stringify({
+    schema: 1,
+    pending: {
+      dead: { requestId: 'req-dead', processId: 999999 },
+      live: { requestId: 'req-live', processId: process.pid },
+      broken: { requestId: 'req-broken' },
+    },
+  }), 'utf8')
+  const store = createStore({ path: file })
+  await store.ready()
+  assert.equal(store.pending('dead'), undefined, '死进程留下的 pending 必须丢掉')
+  assert.equal(store.pending('broken'), undefined, '没有 processId 的无法确认接收方，也丢')
+  assert.equal(store.pending('live')?.requestId, 'req-live', '本进程发起的 pending 要保留')
+})
+
+check('pending 清理：PID 被复用也算陈旧（靠时间闸兜底）', async () => {
+  const file = await tempFile()
+  const thirteenHoursAgo = Date.now() - 13 * 60 * 60 * 1000
+  // process.ppid 几乎一定是活的，用它模拟"PID 被别的进程占用了"的死请求
+  await fsp.writeFile(file, JSON.stringify({
+    schema: 1,
+    pending: {
+      reused: { requestId: 'req-reused', processId: process.ppid, sentAt: thirteenHoursAgo },
+      fresh: { requestId: 'req-fresh', processId: process.ppid, sentAt: Date.now() },
+    },
+  }), 'utf8')
+  const store = createStore({ path: file })
+  await store.ready()
+  assert.equal(store.pending('reused'), undefined, '活 PID + 超过 12 小时 → 当陈旧丢弃')
+  assert.equal(store.pending('fresh')?.requestId, 'req-fresh', '活 PID + 新鲜 → 保留')
+})
+
 check('损坏文件：备份后从空状态继续，绝不抛', async () => {
   const file = await tempFile()
   await fsp.writeFile(file, '{ 这不是 JSON', 'utf8')
